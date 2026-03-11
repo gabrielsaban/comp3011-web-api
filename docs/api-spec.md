@@ -30,10 +30,41 @@
 { "data": [ ... ], "query": { "<applied parameters>" } }
 ```
 
+**Scoped collection** (used when a child resource collection is scoped to a parent)
+```json
+{
+  "context": { "<parent resource>" },
+  "data": [ ... ],
+  "meta": { "page": 1, "per_page": 25, "total": 312 }
+}
+```
+
 **Error**
 ```json
 { "error": { "code": "NOT_FOUND", "message": "Accident not found.", "details": [] } }
 ```
+
+---
+
+### Path Parameter Conventions
+
+#### `:id`
+The primary identifier for top-level resources (accidents, regions, local authorities). For accidents this is the STATS19 accident index string (e.g. `2022010012345`). For other resources it is an integer primary key.
+
+#### `:ref`
+An ordinal reference number scoped within a parent accident, not a global database ID. This mirrors the STATS19 source data structure in which vehicles and casualties are numbered sequentially per accident (1, 2, 3...). A `:ref` value is only meaningful in combination with its parent `:id`.
+
+---
+
+### Content-Type
+
+All requests with a body must include the header:
+
+```
+Content-Type: application/json
+```
+
+All responses carry `Content-Type: application/json`.
 
 ---
 
@@ -233,10 +264,10 @@ All fields from the list response, plus:
 | `road_surface_id` | integer | No | FK to road_surface |
 | `speed_limit` | integer | No | Speed limit in mph |
 | `local_authority_id` | integer | No | FK to local_authority |
-| `number_of_vehicles` | integer | Yes | Count of vehicles |
-| `number_of_casualties` | integer | Yes | Count of casualties |
 | `urban_or_rural` | string | No | `Urban`, `Rural`, or `Unallocated` |
 | `police_attended` | boolean | No | Whether police attended |
+
+> `number_of_vehicles` and `number_of_casualties` are not accepted as inputs. They are derived server-side from the count of associated vehicle and casualty records respectively.
 
 **Example Request Body:**
 ```json
@@ -250,8 +281,6 @@ All fields from the list response, plus:
   "road_type_id": 3,
   "speed_limit": 30,
   "local_authority_id": 1,
-  "number_of_vehicles": 1,
-  "number_of_casualties": 1,
   "urban_or_rural": "Urban",
   "police_attended": false
 }
@@ -457,9 +486,9 @@ All fields from the list response, plus:
 
 ---
 
-### `PUT /accidents/:id/vehicles/:ref`
+### `PATCH /accidents/:id/vehicles/:ref`
 
-**Purpose:** Fully replace a vehicle record. All fields are overwritten with the values provided.
+**Purpose:** Partially update a vehicle record. Only fields provided are modified.
 
 **Path Parameters:**
 
@@ -468,7 +497,7 @@ All fields from the list response, plus:
 | `id` | string | STATS19 accident index |
 | `ref` | integer | Vehicle reference number |
 
-**Request Body:** Same fields as `POST /accidents/:id/vehicles`. All fields required.
+**Request Body:** Any subset of fields accepted by `POST /accidents/:id/vehicles`.
 
 **Example Response `200 OK`:** Updated vehicle object.
 
@@ -577,7 +606,8 @@ All fields from the list response, plus:
 | `casualty_type` | string | No | e.g. `Car occupant`, `Cyclist` |
 | `sex` | string | No | `Male`, `Female`, or `Not known` |
 | `age` | integer | No | Age in years |
-| `age_band` | string | No | Age band string |
+
+> `age_band` is not accepted as an input. It is derived server-side from `age` using the STATS19 standard band definitions.
 
 **Example Request Body:**
 ```json
@@ -587,8 +617,7 @@ All fields from the list response, plus:
   "casualty_class": "Passenger",
   "casualty_type": "Car occupant",
   "sex": "Female",
-  "age": 29,
-  "age_band": "26-35"
+  "age": 29
 }
 ```
 
@@ -612,9 +641,9 @@ All fields from the list response, plus:
 
 ---
 
-### `PUT /accidents/:id/casualties/:ref`
+### `PATCH /accidents/:id/casualties/:ref`
 
-**Purpose:** Fully replace a casualty record.
+**Purpose:** Partially update a casualty record. Only fields provided are modified.
 
 **Path Parameters:**
 
@@ -623,7 +652,7 @@ All fields from the list response, plus:
 | `id` | string | STATS19 accident index |
 | `ref` | integer | Casualty reference number |
 
-**Request Body:** Same fields as `POST /accidents/:id/casualties`. All fields required.
+**Request Body:** Any subset of fields accepted by `POST /accidents/:id/casualties`.
 
 **Example Response `200 OK`:** Updated casualty object.
 
@@ -635,6 +664,13 @@ All fields from the list response, plus:
 
 **Purpose:** Remove a casualty record from an accident.
 
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | STATS19 accident index |
+| `ref` | integer | Casualty reference number |
+
 **Response:** `204 No Content`
 
 **Status Codes:** `204` `404`
@@ -644,6 +680,8 @@ All fields from the list response, plus:
 ### `GET /reference/conditions`
 
 **Purpose:** Return all lookup tables in a single response. Used to populate filter dropdowns without multiple round-trips. Scope to one table using the `type` parameter.
+
+> **Design note:** This endpoint intentionally departs from strict REST resource modelling by returning multiple resource types in one response. The trade-off is justified: clients initialising a filter UI require all condition tables simultaneously, and separate per-table endpoints would produce unnecessary round-trips with no benefit. The `type` parameter preserves the ability to fetch a single table when needed.
 
 **Query Parameters:**
 
@@ -796,7 +834,7 @@ All fields from the list response, plus:
 **Example Response `200 OK`:**
 ```json
 {
-  "local_authority": {
+  "context": {
     "id": 14,
     "name": "Leeds",
     "region": { "id": 3, "name": "Yorkshire and The Humber" }
@@ -825,7 +863,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ---
 
-### `GET /analytics/time-heatmap`
+### `GET /analytics/accidents-by-time`
 
 **Purpose:** Return accident frequency bucketed by hour of day (0–23) and day of week (1–7). The full 168-cell matrix is returned including cells with zero accidents so clients can render a complete heatmap without inferring gaps.
 
@@ -911,7 +949,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `dimension` | string | Yes | `weather`, `light`, `road_surface`, `road_type`, or `junction` |
+| `dimension` | string | Yes | `weather`, `light`, `road_surface`, `road_type`, `junction`, or `urban_or_rural` |
 | `date_from` | `YYYY-MM-DD` | No | Start of date range |
 | `date_to` | `YYYY-MM-DD` | No | End of date range |
 | `region_id` | integer | No | Scope to a region |
@@ -943,7 +981,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ---
 
-### `GET /analytics/speed-limit-risk`
+### `GET /analytics/severity-by-speed-limit`
 
 **Purpose:** Return severity distribution and fatal rate for each speed limit band, enabling comparison of injury outcomes across road speed environments.
 
@@ -1025,7 +1063,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ---
 
-### `GET /analytics/vehicle-involvement`
+### `GET /analytics/accidents-by-vehicle-type`
 
 **Purpose:** Return accident counts segmented by vehicle type with severity breakdown, showing which vehicle categories appear most frequently in serious or fatal collisions.
 
@@ -1063,7 +1101,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ---
 
-### `GET /analytics/casualty-demographics`
+### `GET /analytics/casualties-by-demographic`
 
 **Purpose:** Break down casualties by age band, casualty class, and sex to identify which demographic groups are over-represented in accident casualties.
 
@@ -1101,9 +1139,9 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ---
 
-### `GET /analytics/fatal-factors`
+### `GET /analytics/fatal-condition-combinations`
 
-**Purpose:** Identify which combinations of environmental conditions most frequently appear in fatal accidents. Returns ranked condition combinations (weather × light × road surface × junction type) to expose systemic risk patterns rather than isolated variables.
+**Purpose:** Identify which combinations of environmental conditions carry the highest fatal accident rate. Returns condition combinations (weather × light × road surface × junction type) ranked by `fatal_rate_pct` rather than raw count, preventing common conditions from dominating results simply due to exposure volume.
 
 **Query Parameters:**
 
@@ -1118,12 +1156,14 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `rank` | integer | Rank by fatal accident count |
+| `rank` | integer | Rank by fatal rate percentage |
 | `weather` | string | Weather condition label |
 | `light` | string | Light condition label |
 | `road_surface` | string | Road surface label |
 | `junction_detail` | string | Junction type label |
+| `total_accidents` | integer | Total accidents matching this combination |
 | `fatal_accidents` | integer | Fatal accidents matching this combination |
+| `fatal_rate_pct` | float | Fatal accidents as percentage of total for this combination |
 
 **Example Response `200 OK`:**
 ```json
@@ -1132,18 +1172,22 @@ All analytical endpoints return a `query` object echoing the parameters that wer
     {
       "rank": 1,
       "weather": "Fine without strong winds",
-      "light": "Darkness: street lighting present and lit",
+      "light": "Darkness: no street lighting",
       "road_surface": "Dry",
       "junction_detail": "Not at junction or within 20 metres",
-      "fatal_accidents": 312
+      "total_accidents": 4201,
+      "fatal_accidents": 189,
+      "fatal_rate_pct": 4.50
     },
     {
       "rank": 2,
-      "weather": "Fine without strong winds",
-      "light": "Daylight",
-      "road_surface": "Dry",
+      "weather": "Fog or mist",
+      "light": "Darkness: street lighting present and lit",
+      "road_surface": "Wet or damp",
       "junction_detail": "Not at junction or within 20 metres",
-      "fatal_accidents": 289
+      "total_accidents": 812,
+      "fatal_accidents": 34,
+      "fatal_rate_pct": 4.19
     }
   ],
   "query": { "year_from": 2018, "year_to": 2023, "region_id": null, "limit": 20 }
@@ -1154,7 +1198,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ---
 
-### `GET /analytics/local-authority-summary`
+### `GET /analytics/accidents-by-local-authority`
 
 **Purpose:** Return all local authorities ranked by total accident count over a period with severity breakdown, enabling comparison of accident prevalence across administrative areas.
 
@@ -1191,3 +1235,45 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 ```
 
 **Status Codes:** `200` `400` `422`
+
+---
+
+### `GET /analytics/severity-by-journey-purpose`
+
+**Purpose:** Break down accident severity by the stated journey purpose of vehicle drivers involved, revealing which travel contexts (commuting, leisure, professional driving) produce the highest rates of serious or fatal injury.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `date_from` | `YYYY-MM-DD` | Start of date range |
+| `date_to` | `YYYY-MM-DD` | End of date range |
+| `vehicle_type_id` | integer | Scope to a specific vehicle type |
+| `region_id` | integer | Scope to a region |
+
+**Response Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `journey_purpose` | string | Journey purpose label |
+| `total_accidents` | integer | Accidents involving a vehicle with this journey purpose |
+| `fatal` | integer | Fatal accidents |
+| `serious` | integer | Serious accidents |
+| `slight` | integer | Slight accidents |
+| `fatal_rate_pct` | float | Fatal accidents as percentage of total |
+| `serious_or_fatal_rate_pct` | float | Serious or fatal accidents as percentage of total |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    { "journey_purpose": "Commute",       "total_accidents": 41201, "fatal": 312, "serious": 5901, "slight": 34988, "fatal_rate_pct": 0.76, "serious_or_fatal_rate_pct": 15.07 },
+    { "journey_purpose": "Recreation",    "total_accidents": 18412, "fatal": 241, "serious": 3100, "slight": 15071, "fatal_rate_pct": 1.31, "serious_or_fatal_rate_pct": 18.16 },
+    { "journey_purpose": "Professional",  "total_accidents": 9801,  "fatal": 198, "serious": 1801, "slight": 7802,  "fatal_rate_pct": 2.02, "serious_or_fatal_rate_pct": 20.39 },
+    { "journey_purpose": "Other",         "total_accidents": 12041, "fatal": 89,  "serious": 1201, "slight": 10751, "fatal_rate_pct": 0.74, "serious_or_fatal_rate_pct": 10.72 }
+  ],
+  "query": { "date_from": null, "date_to": null, "vehicle_type_id": null, "region_id": null }
+}
+```
+
+**Status Codes:** `200` `400`
