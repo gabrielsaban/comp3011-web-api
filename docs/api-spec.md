@@ -1,5 +1,23 @@
 # UK Road Traffic Accidents — API Specification
 
+## Project Overview
+
+A data-driven REST API built on **FastAPI** and **PostgreSQL** that exposes the [STATS19](https://www.data.gov.uk/dataset/cb7ae6f0-4be6-4935-9277-47e5ce24a11f/road-safety-data) UK road accident dataset (2019–2023, ~500,000 records) enriched with **Met Office MIDAS** weather observations, pre-computed **DBSCAN spatial clusters**, and a **route risk scoring** engine.
+
+The API is organised into five capability layers:
+
+| Layer | Endpoints | Purpose |
+|---|---|---|
+| **CRUD** | 16 | Full read/write access to accident, vehicle, and casualty records |
+| **Weather Enrichment** | 2 | Weather station resource exposing MIDAS observation data linked to accidents |
+| **Relationship** | 4 | Region → local authority hierarchy and scoped accident collections |
+| **Cluster** | 3 | Pre-computed DBSCAN spatial clusters as a first-class resource |
+| **Analytical** | 17 | Aggregation, cross-tabulation, and multi-factor scoring endpoints |
+
+The three extended pillars — weather enrichment, cluster resource, and route risk scoring — collectively enable the API to reason about road risk rather than just retrieve accident records.
+
+---
+
 ## Base URL
 
 ```
@@ -115,6 +133,7 @@ All responses carry `Content-Type: application/json`.
 | `light_condition_id` | integer | Light condition foreign key |
 | `speed_limit` | integer | Exact speed limit in mph |
 | `urban_or_rural` | string | `Urban` or `Rural` |
+| `cluster_id` | integer | Filter to accidents belonging to a specific DBSCAN cluster |
 | `sort` | string | `date` (default) or `severity` |
 | `order` | string | `asc` or `desc` (default) |
 
@@ -186,8 +205,22 @@ All fields from the list response, plus:
 | `weather_condition` | object | Yes | `{ id, label }` |
 | `road_surface` | object | Yes | `{ id, label }` |
 | `police_attended` | boolean | Yes | Whether police attended the scene |
+| `cluster_id` | integer | Yes | DBSCAN cluster this accident belongs to, or `null` if noise point |
+| `weather_observation` | object | Yes | MIDAS observed weather at the time and nearest station — see below |
 | `vehicles` | array | No | Embedded vehicle records |
 | `casualties` | array | No | Embedded casualty records |
+
+**`weather_observation` object:**
+
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+| `station_id` | integer | No | MIDAS weather station ID |
+| `station_name` | string | No | Station name |
+| `station_distance_km` | float | No | Distance from accident to station in km |
+| `temperature_c` | float | Yes | Air temperature in °C |
+| `precipitation_mm` | float | Yes | Precipitation in mm over the observation hour |
+| `wind_speed_ms` | float | Yes | Wind speed in m/s |
+| `visibility_m` | integer | Yes | Visibility in metres |
 
 **Example Response `200 OK`:**
 ```json
@@ -210,6 +243,16 @@ All fields from the list response, plus:
     "number_of_vehicles": 2,
     "number_of_casualties": 1,
     "police_attended": true,
+    "cluster_id": 14,
+    "weather_observation": {
+      "station_id": 3802,
+      "station_name": "Leeds Bradford Airport",
+      "station_distance_km": 4.2,
+      "temperature_c": 8.1,
+      "precipitation_mm": 1.4,
+      "wind_speed_ms": 5.2,
+      "visibility_m": 4800
+    },
     "local_authority": { "id": 14, "name": "Leeds" },
     "region": { "id": 3, "name": "Yorkshire and The Humber" },
     "vehicles": [
@@ -745,6 +788,106 @@ All fields from the list response, plus:
 
 ---
 
+## Weather Enrichment Endpoints
+
+During data import, each accident record is matched to the nearest Met Office MIDAS weather station (within 30km) and the closest hourly observation to the accident time. This links real measured atmospheric conditions — temperature, precipitation, wind, visibility — to accident records, extending analysis beyond STATS19's pre-coded categorical weather field.
+
+---
+
+### `GET /weather-stations`
+
+**Purpose:** List all MIDAS weather stations present in the enriched dataset. Only stations that contributed at least one observation linked to an accident are returned.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `region_id` | integer | Scope to stations within a region's bounding box |
+| `active_on` | `YYYY-MM-DD` | Return only stations active on this date |
+
+**Response Schema:**
+
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+| `id` | integer | No | MIDAS station identifier |
+| `name` | string | No | Station name |
+| `latitude` | float | No | WGS84 latitude |
+| `longitude` | float | No | WGS84 longitude |
+| `elevation_m` | integer | Yes | Station elevation in metres above sea level |
+| `active_from` | string | Yes | ISO 8601 date the station became active |
+| `active_to` | string | Yes | ISO 8601 date the station was decommissioned, or `null` if still active |
+| `linked_accident_count` | integer | No | Number of accidents linked to this station |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    {
+      "id": 3802,
+      "name": "Leeds Bradford Airport",
+      "latitude": 53.8693,
+      "longitude": -1.6604,
+      "elevation_m": 208,
+      "active_from": "1959-01-01",
+      "active_to": null,
+      "linked_accident_count": 4218
+    },
+    {
+      "id": 3011,
+      "name": "Ringway",
+      "latitude": 53.3536,
+      "longitude": -2.2772,
+      "elevation_m": 75,
+      "active_from": "1949-01-01",
+      "active_to": null,
+      "linked_accident_count": 8941
+    }
+  ],
+  "meta": { "page": 1, "per_page": 25, "total": 187 }
+}
+```
+
+**Status Codes:** `200` `400`
+
+---
+
+### `GET /weather-stations/:id`
+
+**Purpose:** Return a single weather station by ID, including summary statistics of the observations it contributed to the dataset.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | MIDAS station ID |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": {
+    "id": 3802,
+    "name": "Leeds Bradford Airport",
+    "latitude": 53.8693,
+    "longitude": -1.6604,
+    "elevation_m": 208,
+    "active_from": "1959-01-01",
+    "active_to": null,
+    "linked_accident_count": 4218,
+    "observation_summary": {
+      "mean_temperature_c": 9.4,
+      "mean_precipitation_mm": 0.14,
+      "mean_wind_speed_ms": 4.8,
+      "mean_visibility_m": 18200,
+      "observations_with_precipitation": 1204
+    }
+  }
+}
+```
+
+**Status Codes:** `200` `404`
+
+---
+
 ## Relationship Endpoints
 
 ---
@@ -859,6 +1002,173 @@ All fields from the list response, plus:
 
 ---
 
+## Cluster Endpoints
+
+DBSCAN (Density-Based Spatial Clustering of Applications with Noise) is run as a **post-import preprocessing step** over all accident coordinates using `epsilon = 0.008°` (~890m) and `min_samples = 10`. The resulting cluster assignments are stored in a `cluster` table and in a `cluster_id` column on each accident row, making clusters a queryable first-class resource rather than something computed at request time.
+
+Accidents not assigned to any cluster (DBSCAN noise points) have `cluster_id = null`.
+
+---
+
+### `GET /clusters`
+
+**Purpose:** List all pre-computed DBSCAN spatial clusters, sorted by accident count descending. Each cluster represents a statistically significant geographic concentration of accidents.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `region_id` | integer | Scope to clusters whose centroid falls within a region |
+| `min_accidents` | integer | Minimum accident count, default `10` |
+| `severity_label` | string | Filter by cluster severity label: `Low`, `Medium`, `High`, or `Critical` |
+
+**Response Schema:**
+
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+| `id` | integer | No | Cluster ID |
+| `centroid_lat` | float | No | Centroid latitude |
+| `centroid_lng` | float | No | Centroid longitude |
+| `radius_km` | float | No | Approximate radius enclosing 95% of cluster members |
+| `accident_count` | integer | No | Total accidents in this cluster |
+| `fatal_count` | integer | No | Fatal accidents |
+| `serious_count` | integer | No | Serious accidents |
+| `fatal_rate_pct` | float | No | Fatal accidents as percentage of total |
+| `severity_label` | string | No | `Low` (<1% fatal), `Medium` (1–2%), `High` (2–5%), `Critical` (>5%) |
+| `local_authority` | object | Yes | Local authority whose boundary contains the centroid |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    {
+      "id": 14,
+      "centroid_lat": 53.8012,
+      "centroid_lng": -1.5489,
+      "radius_km": 0.82,
+      "accident_count": 214,
+      "fatal_count": 6,
+      "serious_count": 38,
+      "fatal_rate_pct": 2.80,
+      "severity_label": "High",
+      "local_authority": { "id": 14, "name": "Leeds" }
+    },
+    {
+      "id": 91,
+      "centroid_lat": 51.5021,
+      "centroid_lng": -0.1289,
+      "radius_km": 1.14,
+      "accident_count": 389,
+      "fatal_count": 3,
+      "serious_count": 51,
+      "fatal_rate_pct": 0.77,
+      "severity_label": "Low",
+      "local_authority": { "id": 1, "name": "Westminster" }
+    }
+  ],
+  "meta": { "page": 1, "per_page": 25, "total": 1842 }
+}
+```
+
+**Status Codes:** `200` `400`
+
+---
+
+### `GET /clusters/:id`
+
+**Purpose:** Return full detail for a single cluster including bounding box, dominant conditions, and year-on-year accident count trend.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Cluster ID |
+
+**Response Schema:**
+
+All fields from the list response, plus:
+
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+| `bbox` | object | No | `{ min_lat, min_lng, max_lat, max_lng }` — bounding box of cluster members |
+| `dominant_conditions` | object | No | Most common weather, light, road surface, and speed limit among cluster accidents |
+| `annual_trend` | array | No | Year-by-year accident count within the cluster |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": {
+    "id": 14,
+    "centroid_lat": 53.8012,
+    "centroid_lng": -1.5489,
+    "radius_km": 0.82,
+    "accident_count": 214,
+    "fatal_count": 6,
+    "serious_count": 38,
+    "fatal_rate_pct": 2.80,
+    "severity_label": "High",
+    "local_authority": { "id": 14, "name": "Leeds" },
+    "bbox": { "min_lat": 53.794, "min_lng": -1.561, "max_lat": 53.809, "max_lng": -1.537 },
+    "dominant_conditions": {
+      "weather": "Fine without strong winds",
+      "light": "Darkness: street lighting present and lit",
+      "road_surface": "Dry",
+      "speed_limit": 30
+    },
+    "annual_trend": [
+      { "year": 2019, "accident_count": 48 },
+      { "year": 2020, "accident_count": 29 },
+      { "year": 2021, "accident_count": 41 },
+      { "year": 2022, "accident_count": 52 },
+      { "year": 2023, "accident_count": 44 }
+    ]
+  }
+}
+```
+
+**Status Codes:** `200` `404`
+
+---
+
+### `GET /clusters/:id/accidents`
+
+**Purpose:** Return all accidents belonging to a specific cluster, using the scoped collection envelope. Accepts the same filter and pagination parameters as `GET /accidents`.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Cluster ID |
+
+**Query Parameters:** Same as `GET /accidents`, excluding `cluster_id`.
+
+**Example Response `200 OK`:**
+```json
+{
+  "context": {
+    "id": 14,
+    "centroid_lat": 53.8012,
+    "centroid_lng": -1.5489,
+    "severity_label": "High"
+  },
+  "data": [
+    {
+      "id": "2022010012345",
+      "date": "2022-03-15",
+      "severity": { "id": 2, "label": "Serious" },
+      "speed_limit": 30,
+      "number_of_vehicles": 2,
+      "number_of_casualties": 1
+    }
+  ],
+  "meta": { "page": 1, "per_page": 25, "total": 214 }
+}
+```
+
+**Status Codes:** `200` `404`
+
+---
+
 ## Analytical Endpoints
 
 All analytical endpoints return a `query` object echoing the parameters that were applied.
@@ -947,18 +1257,20 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ### `GET /analytics/severity-by-conditions`
 
-**Purpose:** Cross-tabulate accident severity against one environmental condition dimension. The `dimension` parameter selects the grouping axis, replacing the need for separate endpoints per condition type.
+**Purpose:** Cross-tabulate accident severity against one environmental condition dimension. The `dimension` parameter selects the grouping axis, replacing the need for separate endpoints per condition type. MIDAS-enriched dimensions (`precipitation_band`, `visibility_band`, `temperature_band`) use binned continuous values from observed weather data rather than STATS19's categorical codes.
 
-> **Implementation note:** The dimensions `weather`, `light`, `road_surface`, `road_type`, and `junction` are stored as foreign keys and require a JOIN to the corresponding lookup table. `urban_or_rural` is a plain string column on the accident row and is grouped directly without a JOIN — the query builder must branch on which dimension is requested.
+> **Implementation note:** The dimensions `weather`, `light`, `road_surface`, `road_type`, and `junction` are stored as foreign keys and require a JOIN to the corresponding lookup table. `urban_or_rural` is a plain string column grouped directly without a JOIN. MIDAS dimensions (`precipitation_band`, `visibility_band`, `temperature_band`) join to the `weather_observation` table and apply a `CASE` expression to bin continuous values. The query builder must branch on which dimension is requested.
 
 **Query Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `dimension` | string | Yes | `weather`, `light`, `road_surface`, `road_type`, `junction`, or `urban_or_rural` |
+| `dimension` | string | Yes | `weather`, `light`, `road_surface`, `road_type`, `junction`, `urban_or_rural`, `precipitation_band`, `visibility_band`, or `temperature_band` |
 | `date_from` | `YYYY-MM-DD` | No | Start of date range |
 | `date_to` | `YYYY-MM-DD` | No | End of date range |
 | `region_id` | integer | No | Scope to a region |
+
+> **MIDAS dimension bands:** `precipitation_band` bins as `None (0mm)`, `Light (0–2mm)`, `Moderate (2–10mm)`, `Heavy (>10mm)`. `visibility_band` bins as `Very poor (<200m)`, `Poor (200–1000m)`, `Moderate (1–4km)`, `Good (>4km)`. `temperature_band` bins as `Freezing (<0°C)`, `Cold (0–5°C)`, `Mild (5–15°C)`, `Warm (>15°C)`. Only accidents with a linked `weather_observation` are included when using MIDAS dimensions.
 
 **Response Schema:**
 
@@ -1030,7 +1342,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ### `GET /analytics/hotspots`
 
-**Purpose:** Return accident clusters within a radius of a given coordinate, grouped into 0.01-degree grid cells. Identifies geographic concentrations without requiring a dedicated GIS layer.
+**Purpose:** Return accident density for all grid cells within a radius of a given coordinate, grouped into 0.01-degree cells. This is an **ad-hoc spatial query** intended for exploring arbitrary locations. For pre-identified high-risk concentrations, use `GET /clusters` which exposes DBSCAN-computed clusters as a first-class resource with richer metadata and better performance.
 
 > **Implementation note:** The bounding box pre-filter (`lat BETWEEN ? AND ?`, `lng BETWEEN ? AND ?`) runs in SQL using standard B-tree indexes. The exact radius check uses the Haversine formula, which requires `SIN`, `COS`, `ASIN`, and `SQRT` — functions available in PostgreSQL but not in SQLite's default build (SQLite requires compilation with `SQLITE_ENABLE_MATH_FUNCTIONS`). This endpoint requires PostgreSQL. The radius check can alternatively be applied in Python after the bounding-box SQL query.
 
@@ -1486,3 +1798,228 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 ```
 
 **Status Codes:** `200` `400`
+
+---
+
+### `GET /analytics/weather-correlation`
+
+**Purpose:** Cross-tabulate accident severity against binned MIDAS observed weather metrics (precipitation, visibility, temperature, wind speed). Unlike `severity-by-conditions` which uses STATS19's categorical weather codes, this endpoint uses measured values from linked weather station observations — enabling quantitative statements such as "accidents in precipitation >10mm are X times more likely to be fatal than in dry conditions". Only accidents with a linked weather observation are included.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `metric` | string | Yes | `precipitation`, `visibility`, `temperature`, or `wind_speed` |
+| `date_from` | `YYYY-MM-DD` | No | Start of date range |
+| `date_to` | `YYYY-MM-DD` | No | End of date range |
+| `region_id` | integer | No | Scope to a region |
+
+**Response Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `band` | string | Metric band label |
+| `band_range` | string | Numeric range of the band, e.g. `2–10mm` |
+| `total_accidents` | integer | Accidents in this band (with observation data) |
+| `fatal` | integer | Fatal accidents |
+| `serious` | integer | Serious accidents |
+| `slight` | integer | Slight accidents |
+| `fatal_rate_pct` | float | Fatal accidents as percentage of total |
+| `coverage_pct` | float | Percentage of all matched accidents this band represents |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    { "band": "None",     "band_range": "0mm",     "total_accidents": 241082, "fatal": 1891, "serious": 35201, "slight": 203990, "fatal_rate_pct": 0.78, "coverage_pct": 71.2 },
+    { "band": "Light",    "band_range": "0–2mm",   "total_accidents": 54301,  "fatal": 512,  "serious": 8901,  "slight": 44888,  "fatal_rate_pct": 0.94, "coverage_pct": 16.0 },
+    { "band": "Moderate", "band_range": "2–10mm",  "total_accidents": 31201,  "fatal": 389,  "serious": 5801,  "slight": 25011,  "fatal_rate_pct": 1.25, "coverage_pct": 9.2 },
+    { "band": "Heavy",    "band_range": ">10mm",   "total_accidents": 12041,  "fatal": 210,  "serious": 2401,  "slight": 9430,   "fatal_rate_pct": 1.74, "coverage_pct": 3.6 }
+  ],
+  "query": { "metric": "precipitation", "date_from": null, "date_to": null, "region_id": null }
+}
+```
+
+**Status Codes:** `200` `400` `422`
+
+---
+
+## Route Risk
+
+The route risk engine is the API's flagship analytical feature. Given a road route as an ordered sequence of waypoints, it segments the route at fixed intervals, scores each segment against the historical accident database using a multi-factor weighted model, and returns a per-segment risk profile alongside an aggregate route score.
+
+This is not a retrieval endpoint. It executes a scoring computation backed by the database and returns a derived result.
+
+---
+
+### `POST /analytics/route-risk`
+
+**Purpose:** Score a road route for historical accident risk. The route is decomposed into segments of `segment_length_km`. For each segment midpoint, five risk factors are computed from the database and combined into a score in `[0, 1]`. The response includes per-segment detail and an aggregate route summary.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `waypoints` | array | Yes | Ordered array of `[latitude, longitude]` pairs defining the route. Minimum 2, maximum 500. |
+| `options.time_of_day` | string | No | `HH:MM` — used to look up time-of-day risk from the accidents-by-time heatmap. Defaults to current UTC time. |
+| `options.day_of_week` | integer | No | `1`–`7` (1 = Sunday). Defaults to current day. |
+| `options.segment_length_km` | float | No | Segment interval in km, default `0.5`, min `0.1`, max `2.0`. |
+| `options.buffer_radius_km` | float | No | Radius around each segment midpoint to search for accidents, default `0.5`. |
+
+**Example Request Body:**
+```json
+{
+  "waypoints": [
+    [53.8008, -1.5491],
+    [53.8124, -1.5312],
+    [53.8201, -1.5098]
+  ],
+  "options": {
+    "time_of_day": "08:30",
+    "day_of_week": 2,
+    "segment_length_km": 0.5
+  }
+}
+```
+
+**Response Schema — `route_summary`:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_distance_km` | float | Total route length in km |
+| `segment_count` | integer | Number of scored segments |
+| `aggregate_risk_score` | float | Mean risk score across all segments, `0`–`1` |
+| `risk_label` | string | `Very Low`, `Low`, `Moderate`, `High`, or `Critical` |
+| `peak_segment_risk` | float | Highest single-segment risk score |
+| `peak_segment_id` | integer | 1-based index of the highest-risk segment |
+| `clusters_intersected` | integer | Number of DBSCAN clusters whose radius the route passes through |
+
+**Response Schema — `segments[]`:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `segment_id` | integer | 1-based ordinal |
+| `start` | array | `[lat, lng]` of segment start |
+| `end` | array | `[lat, lng]` of segment end |
+| `length_km` | float | Actual segment length |
+| `risk_score` | float | Composite risk score `0`–`1` |
+| `risk_label` | string | `Very Low` / `Low` / `Moderate` / `High` / `Critical` |
+| `factors` | object | Individual normalised scores for each factor (see below) |
+| `nearby_accidents` | integer | Accidents within the buffer radius |
+| `nearby_cluster_ids` | array | IDs of DBSCAN clusters intersecting this segment's buffer |
+| `dominant_speed_limit` | integer | Most common speed limit among nearby accidents |
+
+**`factors` object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `accident_density` | float | `0`–`1` — accident count per km² normalised against dataset maximum |
+| `severity_score` | float | `0`–`1` — severity-weighted mean of nearby accidents |
+| `time_risk` | float | `0`–`1` — from accidents-by-time heatmap for requested hour and day |
+| `speed_limit_risk` | float | `0`–`1` — fatal rate for the dominant speed limit, normalised |
+| `cluster_proximity` | float | `0`–`1` — `1.0` if inside a cluster, decays with distance otherwise |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": {
+    "route_summary": {
+      "total_distance_km": 2.8,
+      "segment_count": 6,
+      "aggregate_risk_score": 0.44,
+      "risk_label": "Moderate",
+      "peak_segment_risk": 0.71,
+      "peak_segment_id": 3,
+      "clusters_intersected": 1
+    },
+    "segments": [
+      {
+        "segment_id": 1,
+        "start": [53.8008, -1.5491],
+        "end":   [53.8051, -1.5432],
+        "length_km": 0.50,
+        "risk_score": 0.31,
+        "risk_label": "Low",
+        "factors": {
+          "accident_density": 0.28,
+          "severity_score": 0.22,
+          "time_risk": 0.61,
+          "speed_limit_risk": 0.18,
+          "cluster_proximity": 0.00
+        },
+        "nearby_accidents": 8,
+        "nearby_cluster_ids": [],
+        "dominant_speed_limit": 30
+      },
+      {
+        "segment_id": 3,
+        "start": [53.8101, -1.5358],
+        "end":   [53.8144, -1.5269],
+        "length_km": 0.50,
+        "risk_score": 0.71,
+        "risk_label": "High",
+        "factors": {
+          "accident_density": 0.82,
+          "severity_score": 0.68,
+          "time_risk": 0.61,
+          "speed_limit_risk": 0.18,
+          "cluster_proximity": 1.00
+        },
+        "nearby_accidents": 47,
+        "nearby_cluster_ids": [14],
+        "dominant_speed_limit": 30
+      }
+    ]
+  },
+  "query": {
+    "waypoint_count": 3,
+    "segment_length_km": 0.5,
+    "buffer_radius_km": 0.5,
+    "time_of_day": "08:30",
+    "day_of_week": 2
+  }
+}
+```
+
+**Status Codes:** `201` `400` `422`
+
+> **Note on `201`:** This endpoint returns `201 Created` because the route scoring result is computed on demand and is not idempotent — repeated calls with the same input at different times may produce different results if the underlying accident data is updated.
+
+---
+
+### `GET /analytics/route-risk/scoring-model`
+
+**Purpose:** Return the scoring formula, factor weights, and risk label thresholds used by `POST /analytics/route-risk`. This transparency endpoint allows clients to explain and validate scores.
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": {
+    "formula": "risk_score = w1*accident_density + w2*severity_score + w3*time_risk + w4*speed_limit_risk + w5*cluster_proximity",
+    "weights": {
+      "accident_density": 0.35,
+      "severity_score": 0.30,
+      "time_risk": 0.15,
+      "speed_limit_risk": 0.10,
+      "cluster_proximity": 0.10
+    },
+    "factor_descriptions": {
+      "accident_density": "Accidents per km² within the buffer, normalised against the 99th-percentile density across all 500m cells in the dataset.",
+      "severity_score": "Severity-weighted mean: (3*fatal + 2*serious + 1*slight) / (3 * total). Normalised so a cell with all-fatal accidents scores 1.0.",
+      "time_risk": "Accident count for the requested hour and day from the accidents-by-time heatmap, normalised against the maximum cell count.",
+      "speed_limit_risk": "Fatal rate percentage for the dominant speed limit band, taken from severity-by-speed-limit data and normalised against the maximum observed fatal rate.",
+      "cluster_proximity": "1.0 if the segment midpoint is within any DBSCAN cluster radius. Otherwise decays linearly from 1.0 at the cluster edge to 0.0 at 2km beyond the cluster radius."
+    },
+    "risk_labels": {
+      "0.0–0.2": "Very Low",
+      "0.2–0.4": "Low",
+      "0.4–0.6": "Moderate",
+      "0.6–0.8": "High",
+      "0.8–1.0": "Critical"
+    }
+  }
+}
+```
+
+**Status Codes:** `200`
+
