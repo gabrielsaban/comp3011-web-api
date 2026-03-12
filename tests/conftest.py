@@ -1,5 +1,7 @@
+import asyncio
 from collections.abc import AsyncGenerator
 
+import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -12,10 +14,34 @@ _test_engine = create_async_engine(settings.test_database_url, echo=False, pool_
 _TestSessionLocal = async_sessionmaker(_test_engine, class_=AsyncSession, expire_on_commit=False)
 
 
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Fail immediately with a clear message if the test database is unreachable."""
+
+    async def _check() -> None:
+        dsn = settings.test_database_url.replace("postgresql+asyncpg://", "postgresql://")
+        conn = await asyncio.wait_for(asyncpg.connect(dsn), timeout=3.0)
+        await conn.close()
+
+    try:
+        asyncio.run(_check())
+    except Exception as exc:
+        pytest.exit(
+            f"\nTest database unreachable — start it first:\n"
+            f"  docker compose up -d db_test\n\n"
+            f"Expected at: {settings.test_database_url}\n"
+            f"Error: {type(exc).__name__}: {exc}",
+            returncode=1,
+        )
+
+
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    async with _TestSessionLocal() as session:
-        yield session
+    async with _test_engine.connect() as conn:
+        transaction = await conn.begin()
+        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
+            await conn.begin_nested()
+            yield session
+        await transaction.rollback()
 
 
 @pytest.fixture
