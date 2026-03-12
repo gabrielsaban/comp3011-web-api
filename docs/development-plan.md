@@ -45,6 +45,11 @@ Rules:
 - Do not mix schema, endpoint logic, and unrelated docs in one commit.
 - Use pull requests even for solo work to preserve review notes and rationale.
 
+Branch granularity guidance:
+
+- Use one branch per endpoint slice or behavior change, not one branch per phase.
+- Example for Phase 3: separate branches for accident CRUD, vehicle CRUD, casualty CRUD, and count-field protections.
+
 ## Implementation Sequence
 
 ### Phase 0: Project Bootstrap
@@ -54,11 +59,13 @@ Deliverables:
 - Dependency manifest (`pyproject.toml` or `requirements.txt`) committed.
 - `docker-compose.yml` with local PostgreSQL service.
 - `.env.example` with required settings (`DATABASE_URL`, JWT settings, import paths).
+- Linting/type-checking tooling (`ruff`, `mypy`) configured and runnable.
 - FastAPI app skeleton, configuration, dependency injection.
 - SQLAlchemy async setup and session management.
 - Alembic setup.
 - OpenAPI baseline exposed at `/docs` and `/openapi.json`.
 - Basic pytest setup with async support.
+- CI workflow (`.github/workflows/ci.yml`) running lint, type-check, and tests with PostgreSQL service container.
 
 Exit criteria:
 
@@ -66,20 +73,25 @@ Exit criteria:
 - Health/basic route test passes.
 - `alembic upgrade head` works against local Docker PostgreSQL.
 - `.env.example` is sufficient to bootstrap a local `.env`.
+- `ruff`, `mypy`, and tests run in CI on each push/PR.
 
 ### Phase 1: Core Schema and Migrations
 
 Deliverables:
 
 - Tables and indexes from `docs/architecture.md`.
+- Migration creation order explicitly enforced:
+  - lookup tables -> `weather_station` -> `weather_observation` -> `cluster` -> `accident` -> `vehicle` -> `casualty` -> post-creation FKs
 - Post-creation FK constraints (`accident -> weather_observation`, `accident -> cluster`).
 - Composite integrity for casualty-to-vehicle linkage.
+- Deterministic fixture seed module for tests (weather-linked rows, NULL weather rows, cluster noise points, known severity mixes).
 
 Exit criteria:
 
 - Migration applies cleanly on empty DB.
 - Migration downgrade/upgrade cycle passes.
 - Schema smoke tests pass.
+- Fixture seed can populate a deterministic test baseline from scratch.
 
 ### Phase 2: Auth and Security Baseline
 
@@ -160,6 +172,10 @@ Deliverables:
 - MIDAS matching without duplicate observation insertion.
 - DBSCAN cluster generation and backfill.
 - Startup cache preload (`HEATMAP`, `SPEED_FATAL_RATES`, `P99_DENSITY`) from current DB state.
+- Explicit re-run semantics:
+  - STATS19 + MIDAS import is idempotent for repeated input files.
+  - Cluster recomputation is full replacement, not incremental upsert.
+  - Re-run sequence: clear `accident.cluster_id` -> truncate `cluster` -> recompute DBSCAN -> insert new clusters -> reassign accident FKs.
 
 Cache policy:
 
@@ -170,7 +186,9 @@ Cache policy:
 Exit criteria:
 
 - Import runs end-to-end on sample dataset.
-- Re-run behavior is deterministic and documented.
+- Re-run behavior is deterministic and documented:
+  - aggregate results and assignments are deterministic for identical input
+  - stable numeric `cluster.id` values across reruns are not required
 - Startup cache values are available to dependent services.
 
 ### Phase 8: Route Risk Engine
@@ -178,13 +196,19 @@ Exit criteria:
 Deliverables:
 
 - Segment decomposition and factor calculations F1-F5.
+- Shared scoring constants module (weights, thresholds, label bands) used by both:
+  - route-risk computation
+  - `GET /analytics/route-risk/scoring-model`
 - Aggregate summary and risk labels.
 - `GET /analytics/route-risk/scoring-model`.
+- Cache-aware integration test strategy defined:
+  - build startup caches from deterministic seeded fixture dataset
+  - or inject deterministic cache overrides in test app startup
 
 Exit criteria:
 
 - Numeric tests for factor normalization and weighted score.
-- Integration tests for F3-F5 using imported data and startup caches.
+- Integration tests for F3-F5 using deterministic cache inputs (seeded or injected).
 - Contract tests for response schema and status codes.
 
 ### Phase 9: Hardening and Final Documentation
@@ -196,6 +220,11 @@ Deliverables:
   - `GET /analytics/hotspots`: p95 < 800ms on full dataset
   - `GET /accidents` with `region_id` filter: p95 < 400ms
   - `POST /analytics/route-risk` for 10km route at 0.5km segments: p95 < 2.0s
+- Performance measurement protocol documented:
+  - measured against full imported dataset
+  - local Docker PostgreSQL
+  - single concurrent client
+  - benchmark method and command recorded (for reproducibility in viva/report)
 - README setup/run/testing docs.
 - API documentation process finalized:
   - FastAPI OpenAPI generation as source of truth for implemented behavior
@@ -217,7 +246,10 @@ Test runner and isolation:
 - Dedicated PostgreSQL test database.
 - Migrations applied once per test session.
 - Per-test isolation via transaction rollback/savepoint.
-- Deterministic fixture loader for analytics and route-risk scenarios.
+- Deterministic fixture loader for analytics and route-risk scenarios (implemented in Phase 1).
+- Dedicated fixture profiles:
+  - minimal CRUD fixture
+  - analytics fixture with weather coverage gaps and cluster noise
 
 Minimum test layers:
 
