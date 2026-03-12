@@ -126,9 +126,10 @@ CREATE TABLE accident (
     police_attended        BOOLEAN,
     number_of_vehicles     SMALLINT NOT NULL DEFAULT 0,
     number_of_casualties   SMALLINT NOT NULL DEFAULT 0,
-    -- Set during post-import enrichment steps:
-    weather_observation_id INTEGER REFERENCES weather_observation(id),
-    cluster_id             INTEGER REFERENCES cluster(id)
+    -- Set during post-import enrichment steps. FK constraints are added
+    -- after dependent tables are created (see Section 3.6).
+    weather_observation_id INTEGER,
+    cluster_id             INTEGER
 );
 
 CREATE TABLE vehicle (
@@ -156,9 +157,15 @@ CREATE TABLE casualty (
     sex            TEXT,
     age            SMALLINT,
     age_band       TEXT,                         -- derived from age on insert
+    CONSTRAINT fk_casualty_vehicle_ref
+        FOREIGN KEY (accident_id, vehicle_ref)
+        REFERENCES vehicle(accident_id, vehicle_ref)
+        DEFERRABLE INITIALLY IMMEDIATE,
     UNIQUE(accident_id, casualty_ref)
 );
 ```
+
+When deleting a vehicle through the API, any matching `casualty.vehicle_ref` values are set to `NULL` in the same transaction before the vehicle row is deleted, preserving referential integrity.
 
 ### 3.4 Weather Enrichment Tables
 
@@ -186,6 +193,8 @@ CREATE TABLE weather_observation (
 CREATE INDEX idx_obs_station_time ON weather_observation(station_id, observed_at);
 ```
 
+`station_distance_km` exposed by `GET /accidents/:id` is computed at read time from accident and station coordinates; it is not persisted as a column.
+
 ### 3.5 Cluster Table
 
 ```sql
@@ -200,6 +209,18 @@ CREATE TABLE cluster (
     fatal_rate_pct REAL NOT NULL,
     severity_label TEXT NOT NULL               -- 'Low', 'Medium', 'High', 'Critical'
 );
+```
+
+### 3.6 Post-Creation Foreign Keys
+
+```sql
+ALTER TABLE accident
+    ADD CONSTRAINT fk_accident_weather_observation
+    FOREIGN KEY (weather_observation_id) REFERENCES weather_observation(id);
+
+ALTER TABLE accident
+    ADD CONSTRAINT fk_accident_cluster
+    FOREIGN KEY (cluster_id) REFERENCES cluster(id);
 ```
 
 ---
@@ -267,7 +288,7 @@ For each accident with a non-null latitude and longitude:
 4. Select the nearest remaining station.
 5. Query `weather_observation` for that station where `|observed_at - accident_datetime| <= 1 hour`.
 6. Pick the observation with the smallest time delta.
-7. If found, insert an `weather_observation` row (if not already present) and set `accident.weather_observation_id`.
+7. If found, set `accident.weather_observation_id` to the selected observation row (no duplicate weather observation rows are inserted during enrichment).
 
 This runs in a single pass over sorted accidents, batching DB writes with `executemany`.
 
@@ -474,7 +495,7 @@ comp3011-web-api/
 
 ```python
 # routers/route_risk.py
-@router.post("/analytics/route-risk", status_code=201, response_model=RouteRiskResponse)
+@router.post("/analytics/route-risk", status_code=200, response_model=RouteRiskResponse)
 async def score_route(
     body: RouteRiskRequest,
     db: AsyncSession = Depends(get_db)
@@ -547,9 +568,9 @@ async def get_accident_detail(db: AsyncSession, accident_id: str):
     return build_response(accident, vehicles, casualties)
 ```
 
-### 8.4 Caching for Static Analytical Results
+### 8.4 Caching Strategy and Invalidation
 
-Three values are computed once during import and loaded into module-level memory on API startup. They never change after import because the dataset is static.
+Three values are precomputed during import and loaded into module-level memory on API startup:
 
 | Cache key | Source | Used in |
 |---|---|---|
@@ -557,11 +578,30 @@ Three values are computed once during import and loaded into module-level memory
 | `SPEED_FATAL_RATES[speed_limit]` | `severity-by-speed-limit` result | Route risk F4 |
 | `P99_DENSITY` | 99th-percentile computation over grid cells | Route risk F1 normalisation |
 
-Analytical endpoints that aggregate the full dataset (`annual-trend`, `seasonal-pattern`, `accidents-by-local-authority`) are also candidates for response-level caching with a TTL, using a simple in-process dict keyed on query parameter hash. Appropriate for a deployment where the dataset is static after import.
+Because the API supports write operations, caches are treated as mutable runtime state:
+
+- Any successful mutation to `accident`, `vehicle`, or `casualty` marks affected cache keys as stale.
+- Stale keys are recomputed lazily on the next request under a single-flight lock to avoid duplicate recomputation.
+- Until refresh completes, affected analytics queries bypass cache and execute directly against PostgreSQL.
+
+Analytical endpoints that aggregate the full dataset (`annual-trend`, `seasonal-pattern`, `accidents-by-local-authority`) can additionally use response-level caching with a TTL keyed by query parameter hash.
+
+## 9. Security and Authorization
+
+Authentication is enforced at the API layer using JWT bearer tokens (`Authorization: Bearer <token>`).
+
+- `GET` endpoints are public for presentation/demo use.
+- Write endpoints under `/accidents` require authentication.
+- Role-based authorization:
+  - `editor`: `POST` and `PATCH`
+  - `admin`: `DELETE`
+- Unauthorized requests return `401`; forbidden requests return `403`.
+
+This model keeps analytical exploration easy during demos while protecting data integrity for mutating operations.
 
 ---
 
-## 9. External Dependencies
+## 10. External Dependencies
 
 The API has **no runtime external API calls**. All data is imported into local PostgreSQL before the server starts.
 
