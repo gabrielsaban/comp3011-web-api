@@ -5,6 +5,7 @@
 Before generating suggestions, refer to the following project context:
 
 - `docs/project-brief.md`
+- `docs/coursework-brief.md`
 
 These documents define the coursework goals, constraints, and expectations.
 
