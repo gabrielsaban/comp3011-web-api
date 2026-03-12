@@ -17,6 +17,7 @@ It is intended to keep delivery consistent with:
 - Treat tests as deliverables, not cleanup.
 - Add auth/security controls before broad endpoint expansion.
 - Keep docs synchronized with implementation at each milestone.
+- Prefer simple, explainable implementations over speculative optimizations.
 
 ## Git and Branching Strategy
 
@@ -42,52 +43,62 @@ Rules:
 - Rebase feature branches onto latest `main` before merge.
 - Merge only when tests pass locally.
 - Do not mix schema, endpoint logic, and unrelated docs in one commit.
+- Use pull requests even for solo work to preserve review notes and rationale.
 
 ## Implementation Sequence
 
-## Phase 0: Project Bootstrap
+### Phase 0: Project Bootstrap
 
 Deliverables:
 
+- Dependency manifest (`pyproject.toml` or `requirements.txt`) committed.
+- `docker-compose.yml` with local PostgreSQL service.
+- `.env.example` with required settings (`DATABASE_URL`, JWT settings, import paths).
 - FastAPI app skeleton, configuration, dependency injection.
 - SQLAlchemy async setup and session management.
 - Alembic setup.
-- Basic pytest and test database fixture.
+- OpenAPI baseline exposed at `/docs` and `/openapi.json`.
+- Basic pytest setup with async support.
 
 Exit criteria:
 
-- App starts locally.
+- Fresh clone can run app locally using documented steps.
 - Health/basic route test passes.
-- `alembic upgrade head` works.
+- `alembic upgrade head` works against local Docker PostgreSQL.
+- `.env.example` is sufficient to bootstrap a local `.env`.
 
-## Phase 1: Core Schema and Migrations
+### Phase 1: Core Schema and Migrations
 
 Deliverables:
 
 - Tables and indexes from `docs/architecture.md`.
 - Post-creation FK constraints (`accident -> weather_observation`, `accident -> cluster`).
-- Composite integrity for casualty to vehicle.
+- Composite integrity for casualty-to-vehicle linkage.
 
 Exit criteria:
 
 - Migration applies cleanly on empty DB.
-- Migration downgrade/upgrade cycle passes once.
+- Migration downgrade/upgrade cycle passes.
 - Schema smoke tests pass.
 
-## Phase 2: Auth and Security Baseline
+### Phase 2: Auth and Security Baseline
 
 Deliverables:
 
 - JWT validation dependency.
 - Role checks (`editor`, `admin`) for write routes.
 - Standard error envelope for `401` and `403`.
+- Token issuance strategy for local/demo/testing:
+  - signed tokens via shared secret in config
+  - helper utility (`scripts/mint_token.py`) for non-interactive token generation
 
 Exit criteria:
 
 - Unauthorized and forbidden integration tests pass.
 - Write endpoints are protected; GET endpoints remain public.
+- Token helper can mint valid `editor` and `admin` tokens for manual API testing.
 
-## Phase 3: CRUD Foundation (Accident, Vehicle, Casualty)
+### Phase 3: CRUD Foundation (Accident, Vehicle, Casualty)
 
 Deliverables:
 
@@ -99,13 +110,13 @@ Deliverables:
 Exit criteria:
 
 - Integration tests for all CRUD status paths.
-- No router-level SQL; service-layer query logic only.
+- Service-layer query logic only (checked by code review, not automated test).
 
-## Phase 4: Lookup and Relationship Endpoints
+### Phase 4: Lookup and Relationship Endpoints
 
 Deliverables:
 
-- `GET /reference/conditions`
+- `GET /reference/conditions` as intentionally non-standard REST aggregate response.
 - Region and local-authority relationship endpoints.
 - Scoped collection envelope behavior.
 
@@ -113,8 +124,9 @@ Exit criteria:
 
 - Response shape tests pass for context/meta envelopes.
 - Query parameter validation tests pass.
+- `GET /reference/conditions` behavior remains aligned with `docs/api-spec.md` design note.
 
-## Phase 5: Weather and Cluster Resources
+### Phase 5: Weather and Cluster Resources
 
 Deliverables:
 
@@ -126,7 +138,7 @@ Exit criteria:
 - Coverage tests for nullable weather links and cluster noise points.
 - Pagination and filtering behavior validated.
 
-## Phase 6: Analytics Endpoints
+### Phase 6: Analytics Endpoints (Excluding Route Risk)
 
 Deliverables:
 
@@ -140,7 +152,28 @@ Exit criteria:
 - Deterministic query tests using fixed fixture data.
 - Edge-case tests for empty/partial weather coverage.
 
-## Phase 7: Route Risk Engine
+### Phase 7: Import Pipeline and Startup Caches
+
+Deliverables:
+
+- STATS19 import.
+- MIDAS matching without duplicate observation insertion.
+- DBSCAN cluster generation and backfill.
+- Startup cache preload (`HEATMAP`, `SPEED_FATAL_RATES`, `P99_DENSITY`) from current DB state.
+
+Cache policy:
+
+- Caches are loaded on startup from persisted dataset state.
+- No runtime mutation-driven cache invalidation hooks are implemented.
+- Cache refresh occurs on process restart (including after full dataset re-import).
+
+Exit criteria:
+
+- Import runs end-to-end on sample dataset.
+- Re-run behavior is deterministic and documented.
+- Startup cache values are available to dependent services.
+
+### Phase 8: Route Risk Engine
 
 Deliverables:
 
@@ -151,38 +184,40 @@ Deliverables:
 Exit criteria:
 
 - Numeric tests for factor normalization and weighted score.
+- Integration tests for F3-F5 using imported data and startup caches.
 - Contract tests for response schema and status codes.
 
-## Phase 8: Import Pipeline and Caching
+### Phase 9: Hardening and Final Documentation
 
 Deliverables:
 
-- STATS19 import.
-- MIDAS matching without duplicate observation insertion.
-- DBSCAN cluster generation and backfill.
-- Cache preload and mutation-aware invalidation hooks.
-
-Exit criteria:
-
-- Import runs end-to-end on sample dataset.
-- Re-run behavior is deterministic and documented.
-
-## Phase 9: Hardening and Final Documentation
-
-Deliverables:
-
-- Performance checks on indexed queries.
 - Error-code catalog finalized.
+- Performance checks for high-risk queries with explicit targets:
+  - `GET /analytics/hotspots`: p95 < 800ms on full dataset
+  - `GET /accidents` with `region_id` filter: p95 < 400ms
+  - `POST /analytics/route-risk` for 10km route at 0.5km segments: p95 < 2.0s
 - README setup/run/testing docs.
-- API documentation export and technical report alignment.
+- API documentation process finalized:
+  - FastAPI OpenAPI generation as source of truth for implemented behavior
+  - reconciliation pass against `docs/api-spec.md`
+  - export path for submission artifacts documented
 
 Exit criteria:
 
 - Clean local setup from scratch.
 - All tests green.
+- Performance targets met or explicitly justified.
 - Oral-demo flow rehearsable end-to-end.
 
 ## Testing Strategy
+
+Test runner and isolation:
+
+- `pytest` + async plugin (`pytest-asyncio` or `anyio`) with `httpx.AsyncClient`.
+- Dedicated PostgreSQL test database.
+- Migrations applied once per test session.
+- Per-test isolation via transaction rollback/savepoint.
+- Deterministic fixture loader for analytics and route-risk scenarios.
 
 Minimum test layers:
 
@@ -205,6 +240,7 @@ Priority scenarios:
 - No secrets in repo; environment-based configuration only.
 - Consistent error envelopes without leaking internals.
 - Dependency vulnerability scan before final submission.
+- Token scopes/roles validated on every protected route.
 
 ## Documentation Workflow
 
@@ -212,12 +248,14 @@ At the end of each phase:
 
 - Update relevant API examples if behavior changed.
 - Update architecture notes when implementation deviates.
+- Update `docs/development-plan.md` if phase boundaries, ordering, or scope changes.
 - Record key decisions and tradeoffs for viva defense.
 
 Final artifacts to keep aligned:
 
 - `README.md`
 - API documentation file(s)
+- generated OpenAPI snapshot or export process notes
 - technical report
 - slides
 
@@ -226,5 +264,5 @@ Final artifacts to keep aligned:
 - Endpoint behavior matches `docs/api-spec.md`.
 - Input validation and error responses are tested.
 - Auth requirements are enforced where applicable.
-- Query performance is acceptable with documented indexes.
+- Query performance meets documented latency targets or is explicitly risk-accepted.
 - Examples in docs are still accurate.
