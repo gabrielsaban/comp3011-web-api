@@ -108,7 +108,7 @@ All responses carry `Content-Type: application/json`.
 | `date_from` | `YYYY-MM-DD` | Inclusive lower date bound |
 | `date_to` | `YYYY-MM-DD` | Inclusive upper date bound |
 | `severity` | integer | `1` Fatal, `2` Serious, `3` Slight |
-| `region_id` | integer | Filter to a region |
+| `region_id` | integer | Filter to a region — adds an implicit JOIN via `local_authority` |
 | `local_authority_id` | integer | Filter to a local authority |
 | `road_type_id` | integer | Road type foreign key |
 | `weather_condition_id` | integer | Weather condition foreign key |
@@ -131,8 +131,8 @@ All responses carry `Content-Type: application/json`.
 | `severity` | object | No | `{ id, label }` |
 | `speed_limit` | integer | Yes | Speed limit in mph |
 | `urban_or_rural` | string | Yes | `Urban`, `Rural`, or `Unallocated` |
-| `number_of_vehicles` | integer | No | Vehicles involved |
-| `number_of_casualties` | integer | No | Casualties recorded |
+| `number_of_vehicles` | integer | No | Vehicle count — maintained by the application, incremented on vehicle add |
+| `number_of_casualties` | integer | No | Casualty count — maintained by the application, incremented on casualty add |
 | `local_authority` | object | Yes | `{ id, name }` |
 | `region` | object | Yes | `{ id, name }` |
 
@@ -241,6 +241,8 @@ All fields from the list response, plus:
 
 **Status Codes:** `200` `404`
 
+> **Implementation note:** The `vehicles` and `casualties` arrays must be populated using two separate queries (`SELECT ... WHERE accident_id = ?` for each child table), not a single JOIN across all three tables. A triple JOIN produces a cartesian product (M vehicles × N casualties rows) that requires complex application-side deduplication. Issue the accident query first, then fetch vehicles and casualties in parallel if supported by the ORM, and merge in application code.
+
 ---
 
 ### `POST /accidents`
@@ -267,7 +269,7 @@ All fields from the list response, plus:
 | `urban_or_rural` | string | No | `Urban`, `Rural`, or `Unallocated` |
 | `police_attended` | boolean | No | Whether police attended |
 
-> `number_of_vehicles` and `number_of_casualties` are not accepted as inputs. They are derived server-side from the count of associated vehicle and casualty records respectively.
+> `number_of_vehicles` and `number_of_casualties` are not accepted as inputs. They are stored as integer columns on the accident row, initialised to `0` on creation, and maintained by the application: incremented when a vehicle or casualty is added via `POST`, decremented when one is deleted.
 
 **Example Request Body:**
 ```json
@@ -299,8 +301,8 @@ All fields from the list response, plus:
     "severity": { "id": 3, "label": "Slight" },
     "speed_limit": 30,
     "urban_or_rural": "Urban",
-    "number_of_vehicles": 1,
-    "number_of_casualties": 1,
+    "number_of_vehicles": 0,
+    "number_of_casualties": 0,
     "police_attended": false,
     "local_authority": { "id": 1, "name": "Westminster" },
     "region": { "id": 7, "name": "London" }
@@ -323,6 +325,8 @@ All fields from the list response, plus:
 | `id` | string | STATS19 accident index |
 
 **Request Body:** Any subset of fields accepted by `POST /accidents`.
+
+> `number_of_vehicles` and `number_of_casualties` are not patchable. They are maintained automatically via child resource writes and ignored if submitted.
 
 **Example Request Body:**
 ```json
@@ -792,7 +796,7 @@ All fields from the list response, plus:
 
 ### `GET /regions/:id/local-authorities`
 
-**Purpose:** List all local authorities that belong to a region.
+**Purpose:** List all local authorities that belong to a region, using the scoped collection envelope with the region as context.
 
 **Path Parameters:**
 
@@ -803,15 +807,13 @@ All fields from the list response, plus:
 **Example Response `200 OK`:**
 ```json
 {
-  "data": {
-    "region": { "id": 3, "name": "Yorkshire and The Humber" },
-    "local_authorities": [
-      { "id": 14, "name": "Leeds" },
-      { "id": 15, "name": "Bradford" },
-      { "id": 16, "name": "Sheffield" },
-      { "id": 17, "name": "Wakefield" }
-    ]
-  }
+  "context": { "id": 3, "name": "Yorkshire and The Humber" },
+  "data": [
+    { "id": 14, "name": "Leeds" },
+    { "id": 15, "name": "Bradford" },
+    { "id": 16, "name": "Sheffield" },
+    { "id": 17, "name": "Wakefield" }
+  ]
 }
 ```
 
@@ -866,6 +868,8 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 ### `GET /analytics/accidents-by-time`
 
 **Purpose:** Return accident frequency bucketed by hour of day (0–23) and day of week (1–7). The full 168-cell matrix is returned including cells with zero accidents so clients can render a complete heatmap without inferring gaps.
+
+> **Implementation note:** SQL `GROUP BY` only produces rows for cells that have data. The zero-fill must be applied in Python after the query: build a 24×7 dict pre-populated with `accident_count: 0`, merge the query result in, then flatten to a list ordered by day then hour.
 
 **Query Parameters:**
 
@@ -944,6 +948,8 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 ### `GET /analytics/severity-by-conditions`
 
 **Purpose:** Cross-tabulate accident severity against one environmental condition dimension. The `dimension` parameter selects the grouping axis, replacing the need for separate endpoints per condition type.
+
+> **Implementation note:** The dimensions `weather`, `light`, `road_surface`, `road_type`, and `junction` are stored as foreign keys and require a JOIN to the corresponding lookup table. `urban_or_rural` is a plain string column on the accident row and is grouped directly without a JOIN — the query builder must branch on which dimension is requested.
 
 **Query Parameters:**
 
@@ -1026,6 +1032,8 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 **Purpose:** Return accident clusters within a radius of a given coordinate, grouped into 0.01-degree grid cells. Identifies geographic concentrations without requiring a dedicated GIS layer.
 
+> **Implementation note:** The bounding box pre-filter (`lat BETWEEN ? AND ?`, `lng BETWEEN ? AND ?`) runs in SQL using standard B-tree indexes. The exact radius check uses the Haversine formula, which requires `SIN`, `COS`, `ASIN`, and `SQRT` — functions available in PostgreSQL but not in SQLite's default build (SQLite requires compilation with `SQLITE_ENABLE_MATH_FUNCTIONS`). This endpoint requires PostgreSQL. The radius check can alternatively be applied in Python after the bounding-box SQL query.
+
 **Query Parameters:**
 
 | Parameter | Type | Required | Description |
@@ -1046,14 +1054,13 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 | `accident_count` | integer | Accidents within this cell |
 | `fatal_count` | integer | Fatal accidents within this cell |
 | `serious_count` | integer | Serious accidents within this cell |
-| `nearest_accident_km` | float | Distance to the closest individual accident |
 
 **Example Response `200 OK`:**
 ```json
 {
   "data": [
-    { "cell_lat": 53.80, "cell_lng": -1.55, "accident_count": 47, "fatal_count": 2, "serious_count": 11, "nearest_accident_km": 0.3 },
-    { "cell_lat": 53.81, "cell_lng": -1.54, "accident_count": 31, "fatal_count": 0, "serious_count": 7,  "nearest_accident_km": 0.6 }
+    { "cell_lat": 53.80, "cell_lng": -1.55, "accident_count": 47, "fatal_count": 2, "serious_count": 11 },
+    { "cell_lat": 53.81, "cell_lng": -1.54, "accident_count": 31, "fatal_count": 0, "serious_count": 7  }
   ],
   "query": { "lat": 53.8008, "lng": -1.5491, "radius_km": 5, "severity": null }
 }
@@ -1141,7 +1148,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 
 ### `GET /analytics/fatal-condition-combinations`
 
-**Purpose:** Identify which combinations of environmental conditions carry the highest fatal accident rate. Returns condition combinations (weather × light × road surface × junction type) ranked by `fatal_rate_pct` rather than raw count, preventing common conditions from dominating results simply due to exposure volume.
+**Purpose:** Identify which combinations of environmental conditions carry the highest fatal accident rate. Returns condition combinations (weather × light × road surface × junction type) ranked by `fatal_rate_pct` rather than raw count, preventing common conditions from dominating results simply due to exposure volume. A `min_count` threshold filters out statistically insignificant combinations.
 
 **Query Parameters:**
 
@@ -1150,6 +1157,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 | `year_from` | integer | Start year |
 | `year_to` | integer | End year |
 | `region_id` | integer | Scope to a region |
+| `min_count` | integer | Minimum `total_accidents` for a combination to appear, default `10` |
 | `limit` | integer | Number of results, default `20` |
 
 **Response Schema:**
@@ -1190,7 +1198,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
       "fatal_rate_pct": 4.19
     }
   ],
-  "query": { "year_from": 2018, "year_to": 2023, "region_id": null, "limit": 20 }
+  "query": { "year_from": 2018, "year_to": 2023, "region_id": null, "min_count": 10, "limit": 20 }
 }
 ```
 
@@ -1273,6 +1281,207 @@ All analytical endpoints return a `query` object echoing the parameters that wer
     { "journey_purpose": "Other",         "total_accidents": 12041, "fatal": 89,  "serious": 1201, "slight": 10751, "fatal_rate_pct": 0.74, "serious_or_fatal_rate_pct": 10.72 }
   ],
   "query": { "date_from": null, "date_to": null, "vehicle_type_id": null, "region_id": null }
+}
+```
+
+**Status Codes:** `200` `400`
+
+---
+
+### `GET /analytics/seasonal-pattern`
+
+**Purpose:** Return accident count and fatal rate broken down by month of year (1–12), aggregated across all years in the dataset. Exposes seasonal variation driven by road conditions (winter ice/fog raising fatal rates) and traffic volume (summer leisure traffic raising counts).
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `year_from` | integer | Start year (inclusive) |
+| `year_to` | integer | End year (inclusive) |
+| `region_id` | integer | Scope to a region |
+| `urban_or_rural` | string | `Urban` or `Rural` |
+
+**Response Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `month` | integer | Month number, 1 (January) to 12 (December) |
+| `month_label` | string | Month name |
+| `total_accidents` | integer | Total accidents in this month across all years |
+| `fatal_accidents` | integer | Fatal accidents |
+| `fatal_rate_pct` | float | Fatal accidents as percentage of total |
+| `avg_accidents_per_year` | float | Mean annual accidents for this month |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    { "month": 1,  "month_label": "January",   "total_accidents": 62841, "fatal_accidents": 621, "fatal_rate_pct": 0.99, "avg_accidents_per_year": 12568 },
+    { "month": 7,  "month_label": "July",       "total_accidents": 71203, "fatal_accidents": 589, "fatal_rate_pct": 0.83, "avg_accidents_per_year": 14241 },
+    { "month": 12, "month_label": "December",   "total_accidents": 67412, "fatal_accidents": 698, "fatal_rate_pct": 1.04, "avg_accidents_per_year": 13482 }
+  ],
+  "query": { "year_from": 2019, "year_to": 2023, "region_id": null, "urban_or_rural": null }
+}
+```
+
+**Status Codes:** `200` `400`
+
+---
+
+### `GET /analytics/driver-age-severity`
+
+**Purpose:** Cross-tabulate accident severity against driver age bands. The join traverses `accident → vehicle` rather than accident-only, demonstrating a multi-table analytical query. Reveals which age groups are involved in the most serious collisions.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `date_from` | `YYYY-MM-DD` | Start of date range |
+| `date_to` | `YYYY-MM-DD` | End of date range |
+| `vehicle_type_id` | integer | Scope to a specific vehicle type |
+| `region_id` | integer | Scope to a region |
+
+**Response Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `age_band` | string | Driver age band, e.g. `17-24`, `25-34`, `65+` |
+| `total_accidents` | integer | Accidents involving a driver in this age band |
+| `fatal` | integer | Fatal accidents |
+| `serious` | integer | Serious accidents |
+| `slight` | integer | Slight accidents |
+| `fatal_rate_pct` | float | Fatal accidents as percentage of total |
+| `serious_or_fatal_rate_pct` | float | Serious or fatal accidents as percentage of total |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    { "age_band": "17-24", "total_accidents": 29801, "fatal": 312, "serious": 5201, "slight": 24288, "fatal_rate_pct": 1.05, "serious_or_fatal_rate_pct": 18.50 },
+    { "age_band": "25-34", "total_accidents": 41203, "fatal": 289, "serious": 5901, "slight": 35013, "fatal_rate_pct": 0.70, "serious_or_fatal_rate_pct": 15.03 },
+    { "age_band": "65+",   "total_accidents": 14201, "fatal": 241, "serious": 2801, "slight": 11159, "fatal_rate_pct": 1.70, "serious_or_fatal_rate_pct": 21.42 }
+  ],
+  "query": { "date_from": null, "date_to": null, "vehicle_type_id": null, "region_id": null }
+}
+```
+
+**Status Codes:** `200` `400`
+
+---
+
+### `GET /analytics/vulnerable-road-users`
+
+**Purpose:** Analyse casualty outcomes for pedestrians and cyclists only, broken down by speed limit and urban/rural classification. Traverses `casualty → accident` (the reverse direction to most endpoint queries), exposing systemic risk to non-vehicle road users.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `casualty_type` | string | `Pedestrian` or `Cyclist` — if omitted, both are included |
+| `date_from` | `YYYY-MM-DD` | Start of date range |
+| `date_to` | `YYYY-MM-DD` | End of date range |
+| `region_id` | integer | Scope to a region |
+
+**Response Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `speed_limit` | integer | Speed limit in mph |
+| `urban_or_rural` | string | `Urban`, `Rural`, or `Unallocated` |
+| `total_casualties` | integer | Casualties of the specified type in this context |
+| `fatal_casualties` | integer | Fatal casualties |
+| `serious_casualties` | integer | Serious casualties |
+| `fatal_rate_pct` | float | Fatal casualties as percentage of total |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    { "speed_limit": 20, "urban_or_rural": "Urban",  "total_casualties": 4201, "fatal_casualties": 4,   "serious_casualties": 512, "fatal_rate_pct": 0.10 },
+    { "speed_limit": 30, "urban_or_rural": "Urban",  "total_casualties": 39012, "fatal_casualties": 298, "serious_casualties": 6801, "fatal_rate_pct": 0.76 },
+    { "speed_limit": 60, "urban_or_rural": "Rural",  "total_casualties": 8901,  "fatal_casualties": 201, "serious_casualties": 2100, "fatal_rate_pct": 2.26 }
+  ],
+  "query": { "casualty_type": "Pedestrian", "date_from": null, "date_to": null, "region_id": null }
+}
+```
+
+**Status Codes:** `200` `400` `422`
+
+---
+
+### `GET /analytics/police-attendance-profile`
+
+**Purpose:** Compare severity distributions of accidents where police attended versus those where they did not. `police_attended` in STATS19 correlates strongly with perceived severity at point of report; this endpoint tests that assumption and quantifies the gap.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `date_from` | `YYYY-MM-DD` | Start of date range |
+| `date_to` | `YYYY-MM-DD` | End of date range |
+| `region_id` | integer | Scope to a region |
+
+**Response Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `police_attended` | boolean | Whether police attended the scene |
+| `total_accidents` | integer | Total accidents in this group |
+| `fatal` | integer | Fatal accidents |
+| `serious` | integer | Serious accidents |
+| `slight` | integer | Slight accidents |
+| `fatal_rate_pct` | float | Fatal accidents as percentage of total |
+| `serious_or_fatal_rate_pct` | float | Serious or fatal accidents as percentage of total |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    { "police_attended": true,  "total_accidents": 289041, "fatal": 3891, "serious": 51201, "slight": 233949, "fatal_rate_pct": 1.35, "serious_or_fatal_rate_pct": 19.06 },
+    { "police_attended": false, "total_accidents": 124812, "fatal": 201,  "serious": 8901,  "slight": 115710, "fatal_rate_pct": 0.16, "serious_or_fatal_rate_pct": 7.30 }
+  ],
+  "query": { "date_from": null, "date_to": null, "region_id": null }
+}
+```
+
+**Status Codes:** `200` `400`
+
+---
+
+### `GET /analytics/multi-vehicle-severity`
+
+**Purpose:** Compare severity profiles and average casualty counts between single-vehicle accidents and multi-vehicle collisions, optionally broken down by speed limit. Single-vehicle fatals (run-off-road, pedestrian strikes with no other party) have different causal profiles from multi-vehicle collisions and warrant separate analysis.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `date_from` | `YYYY-MM-DD` | Start of date range |
+| `date_to` | `YYYY-MM-DD` | End of date range |
+| `group_by_speed_limit` | boolean | If `true`, adds a `speed_limit` breakdown dimension — default `false` |
+| `region_id` | integer | Scope to a region |
+
+**Response Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `collision_type` | string | `Single vehicle` or `Multi vehicle` |
+| `speed_limit` | integer or null | Speed limit if `group_by_speed_limit=true`, otherwise `null` |
+| `total_accidents` | integer | Total accidents |
+| `fatal` | integer | Fatal accidents |
+| `serious` | integer | Serious accidents |
+| `slight` | integer | Slight accidents |
+| `fatal_rate_pct` | float | Fatal accidents as percentage of total |
+| `avg_casualties_per_accident` | float | Mean number of casualties per accident |
+
+**Example Response `200 OK`:**
+```json
+{
+  "data": [
+    { "collision_type": "Single vehicle", "speed_limit": null, "total_accidents": 89412, "fatal": 1891, "serious": 12401, "slight": 75120, "fatal_rate_pct": 2.11, "avg_casualties_per_accident": 1.06 },
+    { "collision_type": "Multi vehicle",  "speed_limit": null, "total_accidents": 324441, "fatal": 2201, "serious": 46801, "slight": 275439, "fatal_rate_pct": 0.68, "avg_casualties_per_accident": 1.32 }
+  ],
+  "query": { "date_from": null, "date_to": null, "group_by_speed_limit": false, "region_id": null }
 }
 ```
 
