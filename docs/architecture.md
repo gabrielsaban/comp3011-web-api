@@ -568,7 +568,7 @@ async def get_accident_detail(db: AsyncSession, accident_id: str):
     return build_response(accident, vehicles, casualties)
 ```
 
-### 8.4 Caching Strategy and Invalidation
+### 8.4 Startup Cache Strategy
 
 Three values are precomputed during import and loaded into module-level memory on API startup:
 
@@ -578,11 +578,11 @@ Three values are precomputed during import and loaded into module-level memory o
 | `SPEED_FATAL_RATES[speed_limit]` | `severity-by-speed-limit` result | Route risk F4 |
 | `P99_DENSITY` | 99th-percentile computation over grid cells | Route risk F1 normalisation |
 
-Because the API supports write operations, caches are treated as mutable runtime state:
+Cache policy:
 
-- Any successful mutation to `accident`, `vehicle`, or `casualty` marks affected cache keys as stale.
-- Stale keys are recomputed lazily on the next request under a single-flight lock to avoid duplicate recomputation.
-- Until refresh completes, affected analytics queries bypass cache and execute directly against PostgreSQL.
+- Caches are loaded once on startup from the current database state.
+- Runtime writes to CRUD endpoints do not trigger in-process recomputation hooks for these global aggregates.
+- Cache refresh occurs on process restart (including after full dataset re-import).
 
 Analytical endpoints that aggregate the full dataset (`annual-trend`, `seasonal-pattern`, `accidents-by-local-authority`) can additionally use response-level caching with a TTL keyed by query parameter hash.
 
