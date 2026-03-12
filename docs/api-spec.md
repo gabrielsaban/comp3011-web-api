@@ -4,7 +4,9 @@
 
 A data-driven REST API built on **FastAPI** and **PostgreSQL** that exposes the [STATS19](https://www.data.gov.uk/dataset/cb7ae6f0-4be6-4935-9277-47e5ce24a11f/road-safety-data) UK road accident dataset (2019–2023, ~500,000 records) enriched with **Met Office MIDAS** weather observations, pre-computed **DBSCAN spatial clusters**, and a **route risk scoring** engine.
 
-The API is organised into five capability layers:
+Total documented endpoints: **43**.
+
+The API is organised into six capability layers:
 
 | Layer | Endpoints | Purpose |
 |---|---|---|
@@ -12,7 +14,8 @@ The API is organised into five capability layers:
 | **Weather Enrichment** | 2 | Weather station resource exposing MIDAS observation data linked to accidents |
 | **Relationship** | 4 | Region → local authority hierarchy and scoped accident collections |
 | **Cluster** | 3 | Pre-computed DBSCAN spatial clusters as a first-class resource |
-| **Analytical** | 17 | Aggregation, cross-tabulation, and multi-factor scoring endpoints |
+| **Analytical** | 16 | Aggregation and cross-tabulation endpoints |
+| **Route Risk** | 2 | On-demand route scoring and scoring-model transparency |
 
 The three extended pillars — weather enrichment, cluster resource, and route risk scoring — collectively enable the API to reason about road risk rather than just retrieve accident records.
 
@@ -86,6 +89,18 @@ All responses carry `Content-Type: application/json`.
 
 ---
 
+### Authentication and Authorization
+
+- `GET` endpoints are public for coursework demonstration.
+- Write endpoints (`POST`, `PATCH`, `DELETE` under `/accidents` and child resources) require `Authorization: Bearer <JWT>`.
+- Role model:
+  - `editor`: create/update records
+  - `admin`: delete records
+- Requests with missing/invalid token return `401`.
+- Requests with insufficient role return `403`.
+
+---
+
 ### HTTP Status Codes
 
 | Code | Meaning |
@@ -93,6 +108,8 @@ All responses carry `Content-Type: application/json`.
 | `200` | Successful GET, PUT, PATCH |
 | `201` | Successful POST — resource created |
 | `204` | Successful DELETE — no response body |
+| `401` | Missing or invalid authentication token |
+| `403` | Authenticated but not authorized for the operation |
 | `400` | Malformed request or invalid parameter value |
 | `404` | Resource not found |
 | `422` | Well-formed request that is semantically invalid |
@@ -353,7 +370,7 @@ All fields from the list response, plus:
 }
 ```
 
-**Status Codes:** `201` `400` `422`
+**Status Codes:** `201` `400` `401` `403` `422`
 
 ---
 
@@ -369,7 +386,7 @@ All fields from the list response, plus:
 
 **Request Body:** Any subset of fields accepted by `POST /accidents`.
 
-> `number_of_vehicles` and `number_of_casualties` are not patchable. They are maintained automatically via child resource writes and ignored if submitted.
+> `number_of_vehicles` and `number_of_casualties` are not patchable. Submitting either field returns `422 Unprocessable Entity`.
 
 **Example Request Body:**
 ```json
@@ -386,7 +403,7 @@ All fields from the list response, plus:
 }
 ```
 
-**Status Codes:** `200` `400` `404` `422`
+**Status Codes:** `200` `400` `401` `403` `404` `422`
 
 ---
 
@@ -402,7 +419,7 @@ All fields from the list response, plus:
 
 **Response:** `204 No Content` (empty body)
 
-**Status Codes:** `204` `404`
+**Status Codes:** `204` `401` `403` `404`
 
 ---
 
@@ -529,7 +546,7 @@ All fields from the list response, plus:
 }
 ```
 
-**Status Codes:** `201` `400` `404`
+**Status Codes:** `201` `400` `401` `403` `404`
 
 ---
 
@@ -548,7 +565,7 @@ All fields from the list response, plus:
 
 **Example Response `200 OK`:** Updated vehicle object.
 
-**Status Codes:** `200` `400` `404`
+**Status Codes:** `200` `400` `401` `403` `404`
 
 ---
 
@@ -565,7 +582,9 @@ All fields from the list response, plus:
 
 **Response:** `204 No Content`
 
-**Status Codes:** `204` `404`
+> If casualties currently reference the deleted `vehicle_ref`, the API nulls those casualty `vehicle_ref` values in the same transaction before deleting the vehicle.
+
+**Status Codes:** `204` `401` `403` `404`
 
 ---
 
@@ -684,7 +703,7 @@ All fields from the list response, plus:
 }
 ```
 
-**Status Codes:** `201` `400` `404` `422`
+**Status Codes:** `201` `400` `401` `403` `404` `422`
 
 ---
 
@@ -703,7 +722,7 @@ All fields from the list response, plus:
 
 **Example Response `200 OK`:** Updated casualty object.
 
-**Status Codes:** `200` `400` `404`
+**Status Codes:** `200` `400` `401` `403` `404`
 
 ---
 
@@ -720,7 +739,7 @@ All fields from the list response, plus:
 
 **Response:** `204 No Content`
 
-**Status Codes:** `204` `404`
+**Status Codes:** `204` `401` `403` `404`
 
 ---
 
@@ -1270,7 +1289,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 | `date_to` | `YYYY-MM-DD` | No | End of date range |
 | `region_id` | integer | No | Scope to a region |
 
-> **MIDAS dimension bands:** `precipitation_band` bins as `None (0mm)`, `Light (0–2mm)`, `Moderate (2–10mm)`, `Heavy (>10mm)`. `visibility_band` bins as `Very poor (<200m)`, `Poor (200–1000m)`, `Moderate (1–4km)`, `Good (>4km)`. `temperature_band` bins as `Freezing (<0°C)`, `Cold (0–5°C)`, `Mild (5–15°C)`, `Warm (>15°C)`. Only accidents with a linked `weather_observation` are included when using MIDAS dimensions.
+> **MIDAS dimension bands:** `precipitation_band` bins as `Dry (<0.2mm)`, `Light (0.2–2mm)`, `Moderate (2–10mm)`, `Heavy (>10mm)`. `visibility_band` bins as `Dense Fog (<100m)`, `Fog (100–1000m)`, `Mist (1000–5000m)`, `Clear (>5000m)`. `temperature_band` bins as `Freezing (<=0°C)`, `Cold (0–7°C)`, `Mild (7–15°C)`, `Warm (>15°C)`. Only accidents with a linked `weather_observation` are included when using MIDAS dimensions.
 
 **Response Schema:**
 
@@ -1282,6 +1301,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 | `slight` | integer | Slight accidents |
 | `total` | integer | Total accidents |
 | `fatal_rate_pct` | float | Percentage of total that are fatal |
+| `query.coverage_pct` | float | Percent of accidents in scope with MIDAS coverage (non-MIDAS dimensions return `100.0`) |
 
 **Example Response `200 OK`:**
 ```json
@@ -1291,7 +1311,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
     { "condition": "Fog or mist",               "fatal": 41,  "serious": 490,   "slight": 2890,  "total": 3421,   "fatal_rate_pct": 1.20 },
     { "condition": "Snowing without strong winds", "fatal": 12, "serious": 319, "slight": 2104,  "total": 2435,   "fatal_rate_pct": 0.49 }
   ],
-  "query": { "dimension": "weather", "date_from": null, "date_to": null, "region_id": null }
+  "query": { "dimension": "weather", "date_from": null, "date_to": null, "region_id": null, "coverage_pct": 100.0 }
 }
 ```
 
@@ -1510,7 +1530,7 @@ All analytical endpoints return a `query` object echoing the parameters that wer
       "fatal_rate_pct": 4.19
     }
   ],
-  "query": { "year_from": 2018, "year_to": 2023, "region_id": null, "min_count": 10, "limit": 20 }
+  "query": { "year_from": 2019, "year_to": 2023, "region_id": null, "min_count": 10, "limit": 20 }
 }
 ```
 
@@ -1831,8 +1851,8 @@ All analytical endpoints return a `query` object echoing the parameters that wer
 ```json
 {
   "data": [
-    { "band": "None",     "band_range": "0mm",     "total_accidents": 241082, "fatal": 1891, "serious": 35201, "slight": 203990, "fatal_rate_pct": 0.78, "coverage_pct": 71.2 },
-    { "band": "Light",    "band_range": "0–2mm",   "total_accidents": 54301,  "fatal": 512,  "serious": 8901,  "slight": 44888,  "fatal_rate_pct": 0.94, "coverage_pct": 16.0 },
+    { "band": "Dry",      "band_range": "<0.2mm",  "total_accidents": 241082, "fatal": 1891, "serious": 35201, "slight": 203990, "fatal_rate_pct": 0.78, "coverage_pct": 71.2 },
+    { "band": "Light",    "band_range": "0.2–2mm", "total_accidents": 54301,  "fatal": 512,  "serious": 8901,  "slight": 44888,  "fatal_rate_pct": 0.94, "coverage_pct": 16.0 },
     { "band": "Moderate", "band_range": "2–10mm",  "total_accidents": 31201,  "fatal": 389,  "serious": 5801,  "slight": 25011,  "fatal_rate_pct": 1.25, "coverage_pct": 9.2 },
     { "band": "Heavy",    "band_range": ">10mm",   "total_accidents": 12041,  "fatal": 210,  "serious": 2401,  "slight": 9430,   "fatal_rate_pct": 1.74, "coverage_pct": 3.6 }
   ],
@@ -1981,9 +2001,9 @@ This is not a retrieval endpoint. It executes a scoring computation backed by th
 }
 ```
 
-**Status Codes:** `201` `400` `422`
+**Status Codes:** `200` `400` `422`
 
-> **Note on `201`:** This endpoint returns `201 Created` because the route scoring result is computed on demand and is not idempotent — repeated calls with the same input at different times may produce different results if the underlying accident data is updated.
+> **Note on `200`:** This endpoint returns a computed analytical result and does not persist a new server-side resource.
 
 ---
 
@@ -2022,4 +2042,3 @@ This is not a retrieval endpoint. It executes a scoring computation backed by th
 ```
 
 **Status Codes:** `200`
-
