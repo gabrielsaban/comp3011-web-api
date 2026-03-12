@@ -60,6 +60,7 @@ Deliverables:
 - `docker-compose.yml` with local PostgreSQL service.
 - `.env.example` with required settings (`DATABASE_URL`, JWT settings, import paths).
 - Linting/type-checking tooling (`ruff`, `mypy`) configured and runnable.
+- Test quality tooling (`pytest-cov`) configured for coverage reporting.
 - FastAPI app skeleton, configuration, dependency injection.
 - SQLAlchemy async setup and session management.
 - Alembic setup.
@@ -73,7 +74,7 @@ Exit criteria:
 - Health/basic route test passes.
 - `alembic upgrade head` works against local Docker PostgreSQL.
 - `.env.example` is sufficient to bootstrap a local `.env`.
-- `ruff`, `mypy`, and tests run in CI on each push/PR.
+- `ruff`, `mypy`, tests, and coverage reporting run in CI on each push/PR.
 
 ### Phase 1: Core Schema and Migrations
 
@@ -81,10 +82,12 @@ Deliverables:
 
 - Tables and indexes from `docs/architecture.md`.
 - Migration creation order explicitly enforced:
-  - lookup tables -> `weather_station` -> `weather_observation` -> `cluster` -> `accident` -> `vehicle` -> `casualty` -> post-creation FKs
-- Post-creation FK constraints (`accident -> weather_observation`, `accident -> cluster`).
+  - lookup tables -> `weather_station` -> `weather_observation` -> `cluster` -> `accident` -> `vehicle` -> `casualty`
+- FK constraints declared in the initial table definitions where ordering allows; avoid unnecessary post-creation `ALTER TABLE` steps.
 - Composite integrity for casualty-to-vehicle linkage.
-- Deterministic fixture seed module for tests (weather-linked rows, NULL weather rows, cluster noise points, known severity mixes).
+- Deterministic fixture seed module with explicit profiles:
+  - `minimal_crud`: minimal relational set for CRUD and auth tests
+  - `analytics_route_risk`: weather-linked rows, NULL weather rows, cluster noise points, known severity/time/speed distributions
 
 Exit criteria:
 
@@ -116,12 +119,22 @@ Deliverables:
 
 - Full CRUD endpoints per spec.
 - Correct count maintenance for `number_of_vehicles` and `number_of_casualties`.
+- Concurrency-safe ordinal assignment for child resources:
+  - `POST /accidents/:id/vehicles` assigns next `vehicle_ref` without race conditions
+  - `POST /accidents/:id/casualties` assigns next `casualty_ref` without race conditions
+  - implement with transaction-safe strategy (for example, parent-row locking or equivalent)
 - Vehicle delete behavior that nulls linked casualty `vehicle_ref` first.
 - `PATCH /accidents/:id` rejects count fields with `422`.
+- `GET /accidents` filter implementation and tests:
+  - all documented filters, pagination, and sorting
+  - combined-filter behavior and empty-result handling
+  - `region_id` two-hop join path (`accident -> local_authority -> region`)
 
 Exit criteria:
 
 - Integration tests for all CRUD status paths.
+- Integration tests for `GET /accidents` filter combinations and pagination metadata.
+- Query-level validation that `region_id` join filter is correct and remains within performance targets.
 - Service-layer query logic only (checked by code review, not automated test).
 
 ### Phase 4: Lookup and Relationship Endpoints
@@ -158,6 +171,7 @@ Deliverables:
 - Zero-fill for accidents-by-time heatmap.
 - Min-count protections for fatal-condition-combinations.
 - MIDAS dimension support with `coverage_pct` handling.
+- `GET /analytics/weather-correlation` with metric banding and coverage reporting.
 
 Exit criteria:
 
@@ -169,13 +183,24 @@ Exit criteria:
 Deliverables:
 
 - STATS19 import.
-- MIDAS matching without duplicate observation insertion.
+- MIDAS reload and matching aligned to full-refresh import semantics.
 - DBSCAN cluster generation and backfill.
 - Startup cache preload (`HEATMAP`, `SPEED_FATAL_RATES`, `P99_DENSITY`) from current DB state.
+- Import policy for API-created records is explicit:
+  - imported dataset is authoritative
+  - API-created accident records are ephemeral between full imports and may be removed by refresh
 - Explicit re-run semantics:
-  - STATS19 + MIDAS import is idempotent for repeated input files.
+  - STATS19 + MIDAS import uses full refresh semantics (truncate target tables and reload from source).
+  - corrected source rows are reflected on re-import; removed source rows are removed from DB state on re-import.
   - Cluster recomputation is full replacement, not incremental upsert.
-  - Re-run sequence: clear `accident.cluster_id` -> truncate `cluster` -> recompute DBSCAN -> insert new clusters -> reassign accident FKs.
+  - FK-safe teardown/rebuild sequence is explicit:
+    - set `accident.weather_observation_id = NULL` and `accident.cluster_id = NULL`
+    - truncate/reload STATS19 accident/vehicle/casualty tables
+    - reload MIDAS station/observation tables for the import window
+    - re-run MIDAS matching and assign `weather_observation_id`
+    - truncate/rebuild `cluster` table
+    - reassign `cluster_id`
+    - rebuild startup caches
 
 Cache policy:
 
@@ -248,8 +273,12 @@ Test runner and isolation:
 - Per-test isolation via transaction rollback/savepoint.
 - Deterministic fixture loader for analytics and route-risk scenarios (implemented in Phase 1).
 - Dedicated fixture profiles:
-  - minimal CRUD fixture
-  - analytics fixture with weather coverage gaps and cluster noise
+  - `minimal_crud`
+  - `analytics_route_risk` (weather coverage gaps, cluster noise, and controlled time/speed distributions for F3/F4 expectations)
+- Startup cache strategy for tests is explicit and deterministic:
+  - build caches from seeded fixture data before app startup for cache-dependent suites
+  - or inject deterministic cache overrides in app startup dependencies
+  - do not rely on per-test rollback writes to mutate already-initialized startup caches
 
 Minimum test layers:
 
