@@ -158,6 +158,11 @@ Deliverables:
 - Weather station endpoints.
 - Cluster endpoints and scoped accidents-by-cluster.
 
+Implementation notes:
+
+- `GET /clusters` `local_authority` field is resolved from `cluster.local_authority_id`, which is stored during import (not computed at read time).
+- `GET /clusters/:id` `dominant_conditions` requires four read-time subqueries (dominant weather, light, road surface, speed limit among cluster members). Decide at implementation whether to compute at read time (acceptable given bounded cluster membership) or pre-compute and store as a JSONB column during import. Document the choice.
+
 Exit criteria:
 
 - Coverage tests for nullable weather links and cluster noise points.

@@ -126,10 +126,11 @@ CREATE TABLE accident (
     police_attended        BOOLEAN,
     number_of_vehicles     SMALLINT NOT NULL DEFAULT 0,
     number_of_casualties   SMALLINT NOT NULL DEFAULT 0,
-    -- Set during post-import enrichment steps. FK constraints are added
-    -- after dependent tables are created (see Section 3.6).
-    weather_observation_id INTEGER,
-    cluster_id             INTEGER
+    -- Set during post-import enrichment steps. Both referenced tables
+    -- (weather_observation, cluster) are created before accident in the
+    -- migration, so FK constraints are declared inline.
+    weather_observation_id INTEGER REFERENCES weather_observation(id),
+    cluster_id             INTEGER REFERENCES cluster(id)
 );
 
 CREATE TABLE vehicle (
@@ -199,37 +200,29 @@ CREATE INDEX idx_obs_station_time ON weather_observation(station_id, observed_at
 
 ```sql
 CREATE TABLE cluster (
-    id             SERIAL PRIMARY KEY,
-    centroid_lat   DOUBLE PRECISION NOT NULL,
-    centroid_lng   DOUBLE PRECISION NOT NULL,
-    radius_km      REAL NOT NULL,
-    accident_count INTEGER NOT NULL,
-    fatal_count    INTEGER NOT NULL DEFAULT 0,
-    serious_count  INTEGER NOT NULL DEFAULT 0,
-    fatal_rate_pct REAL NOT NULL,
-    severity_label TEXT NOT NULL               -- 'Low', 'Medium', 'High', 'Critical'
+    id                 SERIAL PRIMARY KEY,
+    centroid_lat       DOUBLE PRECISION NOT NULL,
+    centroid_lng       DOUBLE PRECISION NOT NULL,
+    radius_km          REAL NOT NULL,
+    accident_count     INTEGER NOT NULL,
+    fatal_count        INTEGER NOT NULL DEFAULT 0,
+    serious_count      INTEGER NOT NULL DEFAULT 0,
+    fatal_rate_pct     REAL NOT NULL,
+    severity_label     TEXT NOT NULL,               -- 'Low', 'Medium', 'High', 'Critical'
+    local_authority_id INTEGER REFERENCES local_authority(id)  -- nearest LA centroid to cluster centroid, resolved during import
 );
-```
-
-### 3.6 Post-Creation Foreign Keys
-
-```sql
-ALTER TABLE accident
-    ADD CONSTRAINT fk_accident_weather_observation
-    FOREIGN KEY (weather_observation_id) REFERENCES weather_observation(id);
-
-ALTER TABLE accident
-    ADD CONSTRAINT fk_accident_cluster
-    FOREIGN KEY (cluster_id) REFERENCES cluster(id);
 ```
 
 ---
 
 ## 4. Data Import Pipeline
 
-The import is a standalone script (`scripts/import.py`) run once before the API starts. It is idempotent — re-running truncates all tables and reloads from source files.
+The import is a standalone script (`scripts/import.py`) run before the API starts. It uses **full refresh semantics** — on each run, all existing data is torn down in FK-safe order and reloaded from source files. This ensures corrections and deletions in source data are reflected on re-import.
 
 ```
+               teardown()                 ← NULL FK cols, truncate data tables in FK-safe order
+                       │
+                       ▼
 STATS19 CSVs (2019–2023)         MIDAS CSVs (2019–2023)
          │                                │
          ▼                                ▼
@@ -249,7 +242,7 @@ STATS19 CSVs (2019–2023)         MIDAS CSVs (2019–2023)
                run_dbscan()               ← scikit-learn DBSCAN
                        │
                        ▼
-               write_clusters()           ← populate cluster table
+               write_clusters()           ← populate cluster table + resolve local_authority_id
                        │
                        ▼
                update_accident_clusters() ← set accident.cluster_id
@@ -258,14 +251,22 @@ STATS19 CSVs (2019–2023)         MIDAS CSVs (2019–2023)
                compute_cache_values()     ← P99 density, heatmap, speed rates
 ```
 
-### 4.1 STATS19 Import
+### 4.1 STATS19 Import — Full Refresh
 
-1. For each year, read `accidents_YYYY.csv`, `vehicles_YYYY.csv`, `casualties_YYYY.csv`.
-2. Upsert lookup values (severity codes, condition codes, etc.) into lookup tables.
-3. Resolve or insert `region` and `local_authority` rows; set `local_authority_id`.
-4. Bulk-insert accident rows using `INSERT ... ON CONFLICT DO NOTHING` to handle re-runs.
-5. Insert vehicle rows with auto-assigned `vehicle_ref` (sequential per accident).
-6. Insert casualty rows; compute `age_band` from `age` during insert using STATS19 standard bands:
+Before loading, the teardown step runs in FK-safe order:
+
+1. `UPDATE accident SET weather_observation_id = NULL, cluster_id = NULL`
+2. `TRUNCATE vehicle, casualty, accident CASCADE`
+3. `TRUNCATE weather_observation, weather_station CASCADE`
+4. `TRUNCATE cluster CASCADE`
+
+Then for each year, read `accidents_YYYY.csv`, `vehicles_YYYY.csv`, `casualties_YYYY.csv`:
+
+1. Upsert lookup values (severity codes, condition codes, etc.) into lookup tables using `INSERT ... ON CONFLICT DO NOTHING`. Lookups are stable reference data and are not truncated.
+2. Resolve or insert `region` and `local_authority` rows; set `local_authority_id`.
+3. Bulk-insert accident rows.
+4. Insert vehicle rows with auto-assigned `vehicle_ref` (sequential per accident).
+5. Insert casualty rows; compute `age_band` from `age` during insert using STATS19 standard bands:
 
 ```python
 def age_band(age: int | None) -> str | None:
@@ -320,7 +321,8 @@ For each unique label ≥ 0 (noise points have label −1):
    - **High**: `2.0 < fatal_rate_pct ≤ 5.0`
    - **Medium**: `1.0 < fatal_rate_pct ≤ 2.0`
    - **Low**: `fatal_rate_pct ≤ 1.0`
-6. Insert into `cluster`; update `accident.cluster_id` for all members.
+6. Resolve `local_authority_id`: load all `local_authority` rows with their centroid coordinates (mean of their member accidents' lat/lng), then for each cluster centroid select the nearest local authority by Haversine distance. This is an approximation sufficient for the display label; no boundary polygon data is required.
+7. Insert into `cluster`; update `accident.cluster_id` for all members.
 
 **Parameter justification:**
 
@@ -465,6 +467,7 @@ comp3011-web-api/
 │   ├── routers/
 │   │   ├── accidents.py         # /accidents CRUD routes
 │   │   ├── regions.py           # /regions, /local-authorities routes
+│   │   ├── reference.py         # /reference/conditions route
 │   │   ├── clusters.py          # /clusters routes
 │   │   ├── weather_stations.py  # /weather-stations routes
 │   │   ├── analytics.py         # /analytics/* routes
@@ -583,8 +586,6 @@ Cache policy:
 - Caches are loaded once on startup from the current database state.
 - Runtime writes to CRUD endpoints do not trigger in-process recomputation hooks for these global aggregates.
 - Cache refresh occurs on process restart (including after full dataset re-import).
-
-Analytical endpoints that aggregate the full dataset (`annual-trend`, `seasonal-pattern`, `accidents-by-local-authority`) can additionally use response-level caching with a TTL keyed by query parameter hash.
 
 ## 9. Security and Authorization
 
