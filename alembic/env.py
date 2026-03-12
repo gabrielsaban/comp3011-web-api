@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 # Import Base so Alembic can detect models for autogenerate.
-# Models must be imported before this module is loaded — they are imported
-# transitively via app.models (added in Phase 1).
+# Each model module (e.g. app/models/accident.py) must be imported here once
+# it exists so its tables are registered on Base.metadata. Phase 1 will add
+# those imports when the ORM models are introduced.
 from app.database import Base
 
 config = context.config
