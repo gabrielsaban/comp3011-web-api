@@ -22,7 +22,7 @@ Design and implement a data-driven REST API backed by a PostgreSQL database, exp
 
 | Source | Description | Coverage | Volume |
 |--------|-------------|----------|--------|
-| STATS19 | DfT road safety accident, vehicle, and casualty records | 2018–2022 (5 years) | ~500,000 accidents |
+| STATS19 | DfT road safety accident, vehicle, and casualty records | 2019–2023 (5 years) | ~500,000 accidents |
 | MIDAS | Met Office hourly surface weather observations | Matched by proximity and time | ~350 UK stations |
 
 STATS19 is published under OGL v3 at https://www.data.gov.uk/dataset/cb7ae6f0-4be6-4935-9277-47e5ce24a11f/road-safety-data.
@@ -38,7 +38,7 @@ MIDAS is available via CEDA at https://catalogue.ceda.ac.uk/uuid/220a65615218d5c
 
 ### Reference Documents
 
-- `docs/api-spec.md` — full REST API specification (42 endpoints, request/response schemas, conventions)
+- `docs/api-spec.md` — full REST API specification (43 endpoints, request/response schemas, conventions)
 - `docs/architecture.md` — system design: SQL DDL, import pipeline, DBSCAN parameters, route risk formula, technology stack, application structure, indexing strategy
 
 ---
