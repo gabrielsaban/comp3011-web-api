@@ -6,6 +6,7 @@ from typing import Literal
 from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import Base
 from app.models import (
     Accident,
     Casualty,
@@ -29,22 +30,16 @@ FixtureProfile = Literal["minimal_crud", "analytics_route_risk"]
 
 async def seed_profile(session: AsyncSession, profile: FixtureProfile) -> None:
     """Load deterministic fixture data into the test database."""
-    await session.execute(
-        text(
-            """
-            TRUNCATE casualty, vehicle, accident, cluster, weather_observation, weather_station,
-                     local_authority, region, severity, road_type, junction_detail,
-                     light_condition, weather_condition, road_surface, vehicle_type
-            RESTART IDENTITY CASCADE
-            """
-        )
-    )
+    # RESTART IDENTITY keeps fixture PKs deterministic across runs.
+    # We intentionally do not commit here; caller-level test transaction controls rollback.
+    table_names = ", ".join(f'"{table.name}"' for table in reversed(Base.metadata.sorted_tables))
+    await session.execute(text(f"TRUNCATE {table_names} RESTART IDENTITY CASCADE"))
 
     for model, rows in _rows_for_profile(profile):
         if rows:
             await session.execute(insert(model), rows)
 
-    await session.commit()
+    await session.flush()
 
 
 def _rows_for_profile(profile: FixtureProfile) -> list[tuple[type, list[dict[str, object]]]]:

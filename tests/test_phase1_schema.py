@@ -56,6 +56,8 @@ async def test_casualty_vehicle_composite_fk_enforced(db_session: AsyncSession) 
         )
         await db_session.flush()
 
+    await db_session.rollback()
+
 
 async def test_analytics_route_risk_profile_shape(db_session: AsyncSession) -> None:
     await seed_profile(db_session, "analytics_route_risk")
