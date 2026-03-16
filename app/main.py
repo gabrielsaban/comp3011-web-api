@@ -1,8 +1,9 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.auth import AuthError
-from app.routers import auth_probe, health
+from app.routers import accidents, auth_probe, health
 
 app = FastAPI(
     title="UK Road Traffic Accidents API",
@@ -17,6 +18,45 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(auth_probe.router)
+app.include_router(accidents.router)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    details = [
+        {
+            "loc": list(error.get("loc", [])),
+            "msg": error.get("msg", "Invalid value."),
+            "type": error.get("type", "value_error"),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Request validation failed.",
+                "details": details,
+            }
+        },
+    )
+
+
+@app.exception_handler(422)
+async def unprocessable_entity_handler(request: Request, exc: Exception) -> JSONResponse:
+    message = "Request validation failed."
+    details: list[object] = []
+    if isinstance(exc, HTTPException):
+        message = exc.detail if isinstance(exc.detail, str) else message
+        details = exc.detail if isinstance(exc.detail, list) else []
+
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"code": "VALIDATION_ERROR", "message": message, "details": details}},
+    )
 
 
 @app.exception_handler(AuthError)
