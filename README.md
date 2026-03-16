@@ -54,3 +54,15 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy app
 ```
+
+## Minting JWTs for Local Testing
+
+Use the helper script to mint short-lived local tokens:
+
+```bash
+# editor token
+uv run python scripts/mint_token.py --role editor
+
+# admin token with custom subject and 15-minute expiry
+uv run python scripts/mint_token.py --role admin --sub viva-demo --expires-minutes 15
+```

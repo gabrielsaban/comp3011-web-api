@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, time
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -15,9 +16,13 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.cluster import Cluster
 
 
 class Accident(Base):
@@ -37,8 +42,8 @@ class Accident(Base):
     date: Mapped[date] = mapped_column(Date, nullable=False)
     time: Mapped[time | None] = mapped_column(nullable=True)
     day_of_week: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
-    latitude: Mapped[float | None] = mapped_column(nullable=True)
-    longitude: Mapped[float | None] = mapped_column(nullable=True)
+    latitude: Mapped[float | None] = mapped_column(DOUBLE_PRECISION(precision=53), nullable=True)
+    longitude: Mapped[float | None] = mapped_column(DOUBLE_PRECISION(precision=53), nullable=True)
     local_authority_id: Mapped[int | None] = mapped_column(
         ForeignKey("local_authority.id"),
         nullable=True,
@@ -84,6 +89,7 @@ class Accident(Base):
 
     vehicles: Mapped[list[Vehicle]] = relationship(back_populates="accident")
     casualties: Mapped[list[Casualty]] = relationship(back_populates="accident")
+    cluster: Mapped[Cluster | None] = relationship(back_populates="accidents")
 
 
 class Vehicle(Base):
