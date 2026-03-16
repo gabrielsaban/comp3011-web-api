@@ -49,6 +49,80 @@ async def test_get_accidents_region_filter_can_return_empty(
     assert body["meta"]["total"] == 0
 
 
+async def test_get_accidents_region_filter_returns_expected_total(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    response = await client.get("/api/v1/accidents", params={"region_id": 1})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"]["total"] == 5
+    assert len(body["data"]) == 5
+
+
+async def test_get_accidents_combined_filters_narrow_result_set(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    response = await client.get(
+        "/api/v1/accidents",
+        params={
+            "region_id": 1,
+            "severity": 1,
+            "urban_or_rural": "Urban",
+            "date_from": "2022-03-18",
+            "date_to": "2022-03-21",
+            "weather_condition_id": 1,
+            "light_condition_id": 4,
+            "speed_limit": 40,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"]["total"] == 1
+    assert [row["id"] for row in body["data"]] == ["2022010012346"]
+
+
+async def test_get_accidents_sort_and_order_controls_results(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    oldest_first = await client.get(
+        "/api/v1/accidents",
+        params={"sort": "date", "order": "asc"},
+    )
+    assert oldest_first.status_code == 200
+    asc_data = oldest_first.json()["data"]
+    assert asc_data[0]["id"] == "2022010012345"
+
+    severity_desc = await client.get(
+        "/api/v1/accidents",
+        params={"sort": "severity", "order": "desc"},
+    )
+    assert severity_desc.status_code == 200
+    desc_data = severity_desc.json()["data"]
+    assert desc_data[0]["severity"]["id"] == 3
+
+
+async def test_get_accidents_pagination_metadata_and_slice_are_correct(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    response = await client.get(
+        "/api/v1/accidents",
+        params={"sort": "date", "order": "desc", "page": 2, "per_page": 2},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"] == {"page": 2, "per_page": 2, "total": 5}
+    assert len(body["data"]) == 2
+    assert {row["id"] for row in body["data"]} == {"2022010012346", "2022010012347"}
+
+
 async def test_post_accident_requires_editor_token(client: AsyncClient) -> None:
     payload = {
         "date": "2024-11-01",
