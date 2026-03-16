@@ -1,7 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.routers import health
+from app.core.auth import AuthError
+from app.routers import auth_probe, health
 
 app = FastAPI(
     title="UK Road Traffic Accidents API",
@@ -15,6 +16,16 @@ app = FastAPI(
 )
 
 app.include_router(health.router)
+app.include_router(auth_probe.router)
+
+
+@app.exception_handler(AuthError)
+async def auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.code, "message": exc.message, "details": []}},
+        headers=exc.headers,
+    )
 
 
 @app.exception_handler(404)
