@@ -335,6 +335,11 @@ For each unique label ≥ 0 (noise points have label −1):
 | `metric` | haversine | Spherical distance is required at UK latitudes (~51–53°N) where 1° longitude ≈ 64km but 1° latitude ≈ 111km. |
 | `algorithm` | ball_tree | Required for custom distance metrics in scikit-learn. |
 
+For `GET /clusters/:id`, `dominant_conditions` is computed at read time using four
+aggregate subqueries (weather, light, road surface, speed limit) over accidents
+already assigned to the cluster. This keeps import-time responsibilities simpler
+and is acceptable at coursework scale because cluster member sets are bounded.
+
 ---
 
 ## 5. Route Risk Scoring Model

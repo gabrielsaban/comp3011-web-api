@@ -17,6 +17,17 @@ from app.schemas.accident import (
     VehiclePatch,
     VehicleResponse,
 )
+from app.schemas.cluster import (
+    AnnualTrendPoint,
+    ClusterAccidentCollectionResponse,
+    ClusterAccidentContext,
+    ClusterBBox,
+    ClusterCollectionResponse,
+    ClusterDetail,
+    ClusterItemResponse,
+    ClusterListItem,
+    DominantConditions,
+)
 from app.schemas.reference import ConditionsResponse
 from app.schemas.relationship import (
     LocalAuthorityAccidentCollectionResponse,
@@ -26,6 +37,13 @@ from app.schemas.relationship import (
     RegionItemResponse,
     RegionLocalAuthorityCollectionResponse,
     RegionSummary,
+)
+from app.schemas.weather import (
+    WeatherObservationSummary,
+    WeatherStationCollectionResponse,
+    WeatherStationDetail,
+    WeatherStationItemResponse,
+    WeatherStationListItem,
 )
 
 __all__ = [
@@ -46,6 +64,15 @@ __all__ = [
     "VehicleItemResponse",
     "VehiclePatch",
     "VehicleResponse",
+    "AnnualTrendPoint",
+    "ClusterAccidentCollectionResponse",
+    "ClusterAccidentContext",
+    "ClusterBBox",
+    "ClusterCollectionResponse",
+    "ClusterDetail",
+    "ClusterItemResponse",
+    "ClusterListItem",
+    "DominantConditions",
     "ConditionsResponse",
     "LocalAuthorityAccidentCollectionResponse",
     "LocalAuthorityContext",
@@ -54,4 +81,9 @@ __all__ = [
     "RegionItemResponse",
     "RegionLocalAuthorityCollectionResponse",
     "RegionSummary",
+    "WeatherObservationSummary",
+    "WeatherStationCollectionResponse",
+    "WeatherStationDetail",
+    "WeatherStationItemResponse",
+    "WeatherStationListItem",
 ]

@@ -7,11 +7,13 @@ from app.routers import (
     accidents,
     auth_probe,
     casualties,
+    clusters,
     health,
     local_authorities,
     reference,
     regions,
     vehicles,
+    weather_stations,
 )
 
 app = FastAPI(
@@ -33,6 +35,8 @@ app.include_router(casualties.router)
 app.include_router(reference.router)
 app.include_router(regions.router)
 app.include_router(local_authorities.router)
+app.include_router(weather_stations.router)
+app.include_router(clusters.router)
 
 
 @app.exception_handler(RequestValidationError)
