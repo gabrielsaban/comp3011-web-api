@@ -215,6 +215,28 @@ Cache policy:
 - No runtime mutation-driven cache invalidation hooks are implemented.
 - Cache refresh occurs on process restart (including after full dataset re-import).
 
+Import implementation rules:
+
+- Region/LA hierarchy source: STATS19 does not carry region information directly.
+  The ONS LAD-to-RGN lookup CSV (e.g. `Local_Authority_District_to_Region_(April_YYYY)_EN.csv`)
+  must be loaded first to resolve `local_authority.region_id` for each LA code.
+- Pedestrian `vehicle_ref`: STATS19 encodes pedestrian casualties with `vehicle_reference = 0`.
+  This must be mapped to `NULL` before insert because `casualty.vehicle_ref` participates in
+  a composite FK to `(accident_id, vehicle_ref)` and there is no vehicle row with ref 0.
+- Sentinel value normalisation (applied during CSV parsing, before insert):
+  - `speed_limit = 99` → `NULL` (STATS19 sentinel for "unknown")
+  - `urban_or_rural_area` codes: `1` → `"Urban"`, `2` → `"Rural"`, `3` → `"Unallocated"`
+  - `police_attend_scene_of_accident`: `1` → `True`, `2` → `False`, other/missing → `NULL`
+- `number_of_vehicles` and `number_of_casualties` must be populated directly from the
+  corresponding CSV columns on each accident row. They must **not** be left at the schema
+  `DEFAULT 0` or recomputed from child-row counts; the CSV values are authoritative.
+- `age_band` derivation must use a shared utility function defined once in
+  `scripts/import/utils.py` and imported by both the import script and any casualty
+  service code that needs to derive it at runtime. This avoids band-boundary drift.
+- MIDAS quality control: rows where any `q_*` quality-flag column is non-zero (flagged as
+  suspect or erroneous by the Met Office QC process) must be excluded during MIDAS CSV
+  parsing. Only observations with all `q_*` flags equal to zero are inserted.
+
 Exit criteria:
 
 - Import runs end-to-end on sample dataset.

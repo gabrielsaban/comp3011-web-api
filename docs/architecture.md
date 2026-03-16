@@ -264,7 +264,9 @@ Then for each year, read `accidents_YYYY.csv`, `vehicles_YYYY.csv`, `casualties_
 
 1. Upsert lookup values (severity codes, condition codes, etc.) into lookup tables using `INSERT ... ON CONFLICT DO NOTHING`. Lookups are stable reference data and are not truncated.
 2. Resolve or insert `region` and `local_authority` rows; set `local_authority_id`.
-3. Bulk-insert accident rows.
+3. Bulk-insert accident rows. Set `number_of_vehicles` and `number_of_casualties` directly
+   from the corresponding CSV columns; do not rely on the column `DEFAULT 0` or derive these
+   values from child-row counts — the CSV values are authoritative.
 4. Insert vehicle rows with auto-assigned `vehicle_ref` (sequential per accident).
 5. Insert casualty rows; compute `age_band` from `age` during insert using STATS19 standard bands:
 
