@@ -1,19 +1,30 @@
 import socket
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import pytest
+from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session as SyncSession
+from sqlalchemy.pool import NullPool
 
+from alembic import command
 from app.config import settings
 from app.dependencies import get_session
 from app.main import app
 
-_test_engine = create_async_engine(settings.test_database_url, echo=False, pool_pre_ping=True)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_test_engine = create_async_engine(
+    settings.test_database_url,
+    echo=False,
+    pool_pre_ping=True,
+    poolclass=NullPool,
+)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -33,11 +44,23 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             returncode=1,
         )
 
+    try:
+        alembic_cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+        alembic_cfg.attributes["database_url"] = settings.test_database_url
+        command.upgrade(alembic_cfg, "head")
+    except Exception as exc:  # pragma: no cover - hard-fail startup path
+        pytest.exit(
+            f"\nFailed to apply migrations to test database.\n"
+            f"Expected at: {settings.test_database_url}\n"
+            f"Error: {type(exc).__name__}: {exc}",
+            returncode=1,
+        )
+
 
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     async with _test_engine.connect() as conn:
-        await conn.begin()
+        outer_tx = await conn.begin()
         async with AsyncSession(bind=conn, expire_on_commit=False) as session:
             await conn.begin_nested()
 
@@ -45,11 +68,11 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
             def _restart_savepoint(sync_sess: SyncSession, tx: Any) -> None:
                 """Recreate the savepoint after each commit so rollback isolation
                 holds for any test that calls session.commit() internally."""
-                if tx.nested and not tx._parent.nested:
+                if tx.nested and tx._parent is not None and not tx._parent.nested:
                     sync_sess.begin_nested()
 
             yield session
-        await conn.rollback()
+        await outer_tx.rollback()
 
 
 @pytest.fixture

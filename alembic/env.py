@@ -6,10 +6,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# Import Base so Alembic can detect models for autogenerate.
-# Each model module (e.g. app/models/accident.py) must be imported here once
-# it exists so its tables are registered on Base.metadata. Phase 1 will add
-# those imports when the ORM models are introduced.
+# Import models package so all ORM tables are registered on Base.metadata.
+from app import models  # noqa: F401
 from app.database import Base
 
 config = context.config
@@ -33,8 +31,9 @@ def do_run_migrations(connection):  # type: ignore[no-untyped-def]
 async def run_async_migrations() -> None:
     from app.config import settings
 
+    db_url = config.attributes.get("database_url") or settings.database_url
     configuration = config.get_section(config.config_ini_section) or {}
-    configuration["sqlalchemy.url"] = settings.database_url
+    configuration["sqlalchemy.url"] = db_url
 
     connectable = async_engine_from_config(
         configuration,
@@ -55,8 +54,9 @@ def run_migrations_online() -> None:
 def run_migrations_offline() -> None:
     from app.config import settings
 
+    db_url = config.attributes.get("database_url") or settings.database_url
     context.configure(
-        url=settings.database_url,
+        url=db_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
