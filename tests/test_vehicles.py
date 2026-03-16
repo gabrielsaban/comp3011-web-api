@@ -99,6 +99,16 @@ async def test_post_vehicle_invalid_fk_returns_422(
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+async def test_post_vehicle_unknown_accident_returns_404(client: AsyncClient) -> None:
+    token = create_access_token(subject="editor-user", role="editor")
+    response = await client.post(
+        "/api/v1/accidents/does-not-exist/vehicles",
+        json={"vehicle_type_id": 9},
+        headers=_bearer(token),
+    )
+    assert response.status_code == 404
+
+
 async def test_patch_vehicle_requires_editor_token(
     client: AsyncClient,
     db_session: AsyncSession,
@@ -173,3 +183,16 @@ async def test_delete_vehicle_nulls_casualty_link_and_decrements_count(
     assert accident["number_of_vehicles"] == 0
     assert accident["vehicles"] == []
     assert accident["casualties"][0]["vehicle_ref"] is None
+
+
+async def test_delete_vehicle_not_found_returns_404(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "minimal_crud")
+    admin = create_access_token(subject="admin-user", role="admin")
+    response = await client.delete(
+        "/api/v1/accidents/2022010012345/vehicles/99",
+        headers=_bearer(admin),
+    )
+    assert response.status_code == 404
