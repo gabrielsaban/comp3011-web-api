@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import REAL, ForeignKey, Index, Integer, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.accident import Accident
 
 
 class Cluster(Base):
@@ -11,8 +17,8 @@ class Cluster(Base):
     __table_args__ = (Index("idx_cluster_centroid", "centroid_lat", "centroid_lng"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    centroid_lat: Mapped[float] = mapped_column(nullable=False)
-    centroid_lng: Mapped[float] = mapped_column(nullable=False)
+    centroid_lat: Mapped[float] = mapped_column(DOUBLE_PRECISION(precision=53), nullable=False)
+    centroid_lng: Mapped[float] = mapped_column(DOUBLE_PRECISION(precision=53), nullable=False)
     radius_km: Mapped[float] = mapped_column(REAL, nullable=False)
     accident_count: Mapped[int] = mapped_column(Integer, nullable=False)
     fatal_count: Mapped[int] = mapped_column(
@@ -33,3 +39,5 @@ class Cluster(Base):
         ForeignKey("local_authority.id"),
         nullable=True,
     )
+
+    accidents: Mapped[list[Accident]] = relationship(back_populates="cluster")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import REAL, Date, DateTime, ForeignKey, Index, Integer, Text
+from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -13,8 +14,8 @@ class WeatherStation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    latitude: Mapped[float] = mapped_column(nullable=False)
-    longitude: Mapped[float] = mapped_column(nullable=False)
+    latitude: Mapped[float] = mapped_column(DOUBLE_PRECISION(precision=53), nullable=False)
+    longitude: Mapped[float] = mapped_column(DOUBLE_PRECISION(precision=53), nullable=False)
     elevation_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     active_to: Mapped[date | None] = mapped_column(Date, nullable=True)
