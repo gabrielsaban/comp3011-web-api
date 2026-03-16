@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.accident import Accident
 from app.models.lookups import LocalAuthority
 from app.models.weather import WeatherObservation, WeatherStation
+from app.schemas.accident import MetaPagination
 from app.schemas.weather import (
     WeatherObservationSummary,
-    WeatherStationCollectionMeta,
     WeatherStationDetail,
     WeatherStationListItem,
 )
@@ -40,7 +40,7 @@ async def list_weather_stations(
     per_page: int,
     region_id: int | None,
     active_on: date | None,
-) -> tuple[list[WeatherStationListItem], WeatherStationCollectionMeta]:
+) -> tuple[list[WeatherStationListItem], MetaPagination]:
     linked_counts = _linked_accident_counts_subquery(region_id)
     query = (
         select(WeatherStation, linked_counts.c.linked_accident_count)
@@ -71,7 +71,7 @@ async def list_weather_stations(
         )
         for station, linked_accident_count in rows
     ]
-    meta = WeatherStationCollectionMeta(page=page, per_page=per_page, total=total)
+    meta = MetaPagination(page=page, per_page=per_page, total=total)
     return data, meta
 
 
@@ -80,7 +80,7 @@ async def get_weather_station(session: AsyncSession, station_id: int) -> Weather
     station_row = (
         await session.execute(
             select(WeatherStation, linked_counts.c.linked_accident_count)
-            .join(linked_counts, linked_counts.c.station_id == WeatherStation.id)
+            .outerjoin(linked_counts, linked_counts.c.station_id == WeatherStation.id)
             .where(WeatherStation.id == station_id)
         )
     ).first()
@@ -148,6 +148,6 @@ async def get_weather_station(session: AsyncSession, station_id: int) -> Weather
         elevation_m=station.elevation_m,
         active_from=station.active_from,
         active_to=station.active_to,
-        linked_accident_count=int(linked_accident_count),
+        linked_accident_count=int(linked_accident_count or 0),
         observation_summary=summary,
     )

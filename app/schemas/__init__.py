@@ -40,7 +40,6 @@ from app.schemas.relationship import (
 )
 from app.schemas.weather import (
     WeatherObservationSummary,
-    WeatherStationCollectionMeta,
     WeatherStationCollectionResponse,
     WeatherStationDetail,
     WeatherStationItemResponse,
@@ -83,7 +82,6 @@ __all__ = [
     "RegionLocalAuthorityCollectionResponse",
     "RegionSummary",
     "WeatherObservationSummary",
-    "WeatherStationCollectionMeta",
     "WeatherStationCollectionResponse",
     "WeatherStationDetail",
     "WeatherStationItemResponse",

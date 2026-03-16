@@ -4,6 +4,8 @@ from datetime import date
 
 from pydantic import BaseModel
 
+from app.schemas.accident import MetaPagination
+
 
 class WeatherStationListItem(BaseModel):
     id: int
@@ -16,15 +18,9 @@ class WeatherStationListItem(BaseModel):
     linked_accident_count: int
 
 
-class WeatherStationCollectionMeta(BaseModel):
-    page: int
-    per_page: int
-    total: int
-
-
 class WeatherStationCollectionResponse(BaseModel):
     data: list[WeatherStationListItem]
-    meta: WeatherStationCollectionMeta
+    meta: MetaPagination
 
 
 class WeatherObservationSummary(BaseModel):
