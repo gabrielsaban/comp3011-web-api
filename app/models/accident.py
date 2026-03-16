@@ -23,6 +23,17 @@ from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.cluster import Cluster
+    from app.models.lookups import (
+        JunctionDetail,
+        LightCondition,
+        LocalAuthority,
+        RoadSurface,
+        RoadType,
+        Severity,
+        VehicleType,
+        WeatherCondition,
+    )
+    from app.models.weather import WeatherObservation
 
 
 class Accident(Base):
@@ -87,6 +98,14 @@ class Accident(Base):
     )
     cluster_id: Mapped[int | None] = mapped_column(ForeignKey("cluster.id"), nullable=True)
 
+    local_authority: Mapped[LocalAuthority | None] = relationship()
+    severity: Mapped[Severity] = relationship()
+    road_type: Mapped[RoadType | None] = relationship()
+    junction_detail: Mapped[JunctionDetail | None] = relationship()
+    light_condition: Mapped[LightCondition | None] = relationship()
+    weather_condition: Mapped[WeatherCondition | None] = relationship()
+    road_surface: Mapped[RoadSurface | None] = relationship()
+    weather_observation: Mapped[WeatherObservation | None] = relationship()
     vehicles: Mapped[list[Vehicle]] = relationship(back_populates="accident")
     casualties: Mapped[list[Casualty]] = relationship(back_populates="accident")
     cluster: Mapped[Cluster | None] = relationship(back_populates="accidents")
@@ -117,6 +136,7 @@ class Vehicle(Base):
     journey_purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     accident: Mapped[Accident] = relationship(back_populates="vehicles")
+    vehicle_type: Mapped[VehicleType | None] = relationship()
 
 
 class Casualty(Base):
@@ -148,3 +168,4 @@ class Casualty(Base):
     age_band: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     accident: Mapped[Accident] = relationship(back_populates="casualties")
+    severity: Mapped[Severity] = relationship()
