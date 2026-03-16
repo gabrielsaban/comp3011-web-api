@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import Literal
+from typing import Any, Literal
 
-from sqlalchemy import insert, text
+from sqlalchemy import Integer, insert, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import Base
@@ -35,11 +35,47 @@ async def seed_profile(session: AsyncSession, profile: FixtureProfile) -> None:
     table_names = ", ".join(f'"{table.name}"' for table in reversed(Base.metadata.sorted_tables))
     await session.execute(text(f"TRUNCATE {table_names} RESTART IDENTITY CASCADE"))
 
+    inserted_models: list[type[Any]] = []
     for model, rows in _rows_for_profile(profile):
         if rows:
             await session.execute(insert(model), rows)
+            inserted_models.append(model)
 
+    await _sync_serial_sequences(session, inserted_models)
     await session.flush()
+
+
+async def _sync_serial_sequences(session: AsyncSession, models: list[type[Any]]) -> None:
+    seen_tables: set[str] = set()
+    for model in models:
+        table = model.__table__
+        if table.name in seen_tables:
+            continue
+        seen_tables.add(table.name)
+
+        pk_columns = list(table.primary_key.columns)
+        if len(pk_columns) != 1:
+            continue
+        pk_column = pk_columns[0]
+        if not isinstance(pk_column.type, Integer):
+            continue
+        if pk_column.autoincrement is False:
+            continue
+
+        table_name = table.name
+        column_name = pk_column.name
+        await session.execute(
+            text(
+                f"""
+                SELECT setval(
+                    pg_get_serial_sequence('"{table_name}"', '{column_name}'),
+                    COALESCE((SELECT MAX("{column_name}") FROM "{table_name}"), 1),
+                    true
+                )
+                WHERE pg_get_serial_sequence('"{table_name}"', '{column_name}') IS NOT NULL
+                """
+            )
+        )
 
 
 def _rows_for_profile(profile: FixtureProfile) -> list[tuple[type, list[dict[str, object]]]]:
