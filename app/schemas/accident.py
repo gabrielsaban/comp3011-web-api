@@ -176,3 +176,33 @@ class VehicleCollectionResponse(BaseModel):
 
 class VehicleItemResponse(BaseModel):
     data: VehicleResponse
+
+
+class CasualtyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vehicle_ref: int | None = Field(default=None, ge=1)
+    severity_id: int
+    casualty_class: Literal["Driver", "Passenger", "Pedestrian"] | None = None
+    casualty_type: str | None = None
+    sex: Literal["Male", "Female", "Not known"] | None = None
+    age: int | None = Field(default=None, ge=0)
+
+
+class CasualtyPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vehicle_ref: int | None = Field(default=None, ge=1)
+    severity_id: int | None = None
+    casualty_class: Literal["Driver", "Passenger", "Pedestrian"] | None = None
+    casualty_type: str | None = None
+    sex: Literal["Male", "Female", "Not known"] | None = None
+    age: int | None = Field(default=None, ge=0)
+
+
+class CasualtyCollectionResponse(BaseModel):
+    data: list[CasualtyResponse]
+
+
+class CasualtyItemResponse(BaseModel):
+    data: CasualtyResponse
