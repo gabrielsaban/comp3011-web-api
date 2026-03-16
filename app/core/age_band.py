@@ -15,7 +15,7 @@ AGE_BANDS: tuple[tuple[int, int, str], ...] = (
 
 
 def derive_age_band(age: int | None) -> str | None:
-    if age is None:
+    if age is None or age < 0:
         return None
     for lower, upper, label in AGE_BANDS:
         if lower <= age <= upper:

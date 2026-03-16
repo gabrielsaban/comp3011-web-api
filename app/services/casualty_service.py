@@ -112,8 +112,9 @@ async def create_casualty(
     accident_id: str,
     payload: CasualtyCreate,
 ) -> CasualtyResponse:
-    accident = await _lock_accident(session, accident_id)
+    await _ensure_accident_exists(session, accident_id)
     await _validate_vehicle_ref(session, accident_id, payload.vehicle_ref)
+    accident = await _lock_accident(session, accident_id)
 
     current_max_ref = await session.scalar(
         select(func.coalesce(func.max(Casualty.casualty_ref), 0)).where(
@@ -124,11 +125,12 @@ async def create_casualty(
         raise HTTPException(status_code=500, detail="Failed to allocate casualty reference.")
     next_ref = current_max_ref + 1
 
+    payload_data = payload.model_dump()
+    payload_data["age_band"] = derive_age_band(payload_data.get("age"))
     created = Casualty(
         accident_id=accident_id,
         casualty_ref=next_ref,
-        age_band=derive_age_band(payload.age),
-        **payload.model_dump(),
+        **payload_data,
     )
     session.add(created)
     accident.number_of_casualties += 1
