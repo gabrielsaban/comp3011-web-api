@@ -54,9 +54,7 @@ async def list_weather_stations(
         )
 
     total = int((await session.scalar(select(func.count()).select_from(query.subquery()))) or 0)
-    rows = (
-        await session.execute(query.offset((page - 1) * per_page).limit(per_page))
-    ).all()
+    rows = (await session.execute(query.offset((page - 1) * per_page).limit(per_page))).all()
 
     data = [
         WeatherStationListItem(
@@ -102,9 +100,9 @@ async def get_weather_station(session: AsyncSession, station_id: int) -> Weather
                 func.avg(WeatherObservation.precipitation_mm).label("mean_precipitation_mm"),
                 func.avg(WeatherObservation.wind_speed_ms).label("mean_wind_speed_ms"),
                 func.avg(WeatherObservation.visibility_m).label("mean_visibility_m"),
-                func.sum(
-                    case((WeatherObservation.precipitation_mm > 0, 1), else_=0)
-                ).label("observations_with_precipitation"),
+                func.sum(case((WeatherObservation.precipitation_mm > 0, 1), else_=0)).label(
+                    "observations_with_precipitation"
+                ),
             ).where(WeatherObservation.id.in_(select(linked_observations.c.id)))
         )
     ).first()
