@@ -1,6 +1,10 @@
+from datetime import date
+
 from httpx import AsyncClient
+from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.weather import WeatherStation
 from tests.fixtures import seed_profile
 
 
@@ -32,6 +36,21 @@ async def test_get_weather_stations_active_on_filter_can_return_empty(
     assert response.json()["meta"]["total"] == 0
 
 
+async def test_get_weather_stations_region_filter_applies_scope(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    in_region = await client.get("/api/v1/weather-stations", params={"region_id": 1})
+    assert in_region.status_code == 200
+    assert in_region.json()["meta"]["total"] == 1
+
+    out_of_region = await client.get("/api/v1/weather-stations", params={"region_id": 999})
+    assert out_of_region.status_code == 200
+    assert out_of_region.json()["data"] == []
+    assert out_of_region.json()["meta"]["total"] == 0
+
+
 async def test_get_weather_station_by_id_returns_observation_summary(
     client: AsyncClient,
     db_session: AsyncSession,
@@ -45,6 +64,40 @@ async def test_get_weather_station_by_id_returns_observation_summary(
     assert abs(summary["mean_temperature_c"] - 7.25) < 0.001
     assert abs(summary["mean_visibility_m"] - 6400.0) < 0.001
     assert summary["observations_with_precipitation"] == 1
+
+
+async def test_get_weather_station_by_id_unlinked_station_returns_zero_summary(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    await db_session.execute(
+        insert(WeatherStation),
+        [
+            {
+                "id": 9001,
+                "name": "Unlinked Test Station",
+                "latitude": 52.0,
+                "longitude": -1.0,
+                "elevation_m": 100,
+                "active_from": date(2020, 1, 1),
+                "active_to": None,
+            }
+        ],
+    )
+    await db_session.flush()
+
+    response = await client.get("/api/v1/weather-stations/9001")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["linked_accident_count"] == 0
+    assert data["observation_summary"] == {
+        "mean_temperature_c": None,
+        "mean_precipitation_mm": None,
+        "mean_wind_speed_ms": None,
+        "mean_visibility_m": None,
+        "observations_with_precipitation": 0,
+    }
 
 
 async def test_get_weather_station_by_id_not_found_returns_404(client: AsyncClient) -> None:
@@ -153,6 +206,34 @@ async def test_get_cluster_accidents_can_return_empty_data(
     assert body["context"]["id"] == 15
     assert body["data"] == []
     assert body["meta"]["total"] == 0
+
+
+async def test_cluster_endpoints_exclude_noise_point_accidents(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    cluster_14 = await client.get("/api/v1/clusters/14/accidents")
+    assert cluster_14.status_code == 200
+    ids_14 = {row["id"] for row in cluster_14.json()["data"]}
+    assert "2022010012348" not in ids_14
+    assert "2022010012349" not in ids_14
+
+    cluster_15 = await client.get("/api/v1/clusters/15/accidents")
+    assert cluster_15.status_code == 200
+    ids_15 = {row["id"] for row in cluster_15.json()["data"]}
+    assert "2022010012348" not in ids_15
+    assert "2022010012349" not in ids_15
+
+
+async def test_null_weather_links_do_not_inflate_station_link_counts(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    response = await client.get("/api/v1/weather-stations")
+    assert response.status_code == 200
+    assert response.json()["data"][0]["linked_accident_count"] == 3
 
 
 async def test_get_cluster_accidents_not_found_returns_404(client: AsyncClient) -> None:
