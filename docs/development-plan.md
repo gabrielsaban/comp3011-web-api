@@ -231,7 +231,7 @@ Import implementation rules:
   corresponding CSV columns on each accident row. They must **not** be left at the schema
   `DEFAULT 0` or recomputed from child-row counts; the CSV values are authoritative.
 - `age_band` derivation must use a shared utility function defined once in
-  `scripts/import/utils.py` and imported by both the import script and any casualty
+  `app/core/age_band.py` and imported by both the import script and any casualty
   service code that needs to derive it at runtime. This avoids band-boundary drift.
 - MIDAS quality control: rows where any `q_*` quality-flag column is non-zero (flagged as
   suspect or erroneous by the Met Office QC process) must be excluded during MIDAS CSV
