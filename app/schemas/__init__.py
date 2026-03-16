@@ -17,6 +17,16 @@ from app.schemas.accident import (
     VehiclePatch,
     VehicleResponse,
 )
+from app.schemas.reference import ConditionsResponse
+from app.schemas.relationship import (
+    LocalAuthorityAccidentCollectionResponse,
+    LocalAuthorityContext,
+    RegionCollectionResponse,
+    RegionContext,
+    RegionItemResponse,
+    RegionLocalAuthorityCollectionResponse,
+    RegionSummary,
+)
 
 __all__ = [
     "AccidentCollectionResponse",
@@ -36,4 +46,12 @@ __all__ = [
     "VehicleItemResponse",
     "VehiclePatch",
     "VehicleResponse",
+    "ConditionsResponse",
+    "LocalAuthorityAccidentCollectionResponse",
+    "LocalAuthorityContext",
+    "RegionCollectionResponse",
+    "RegionContext",
+    "RegionItemResponse",
+    "RegionLocalAuthorityCollectionResponse",
+    "RegionSummary",
 ]

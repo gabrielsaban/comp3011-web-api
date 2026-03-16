@@ -3,7 +3,16 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.auth import AuthError
-from app.routers import accidents, auth_probe, casualties, health, vehicles
+from app.routers import (
+    accidents,
+    auth_probe,
+    casualties,
+    health,
+    local_authorities,
+    reference,
+    regions,
+    vehicles,
+)
 
 app = FastAPI(
     title="UK Road Traffic Accidents API",
@@ -21,6 +30,9 @@ app.include_router(auth_probe.router)
 app.include_router(accidents.router)
 app.include_router(vehicles.router)
 app.include_router(casualties.router)
+app.include_router(reference.router)
+app.include_router(regions.router)
+app.include_router(local_authorities.router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -58,6 +70,20 @@ async def unprocessable_entity_handler(request: Request, exc: Exception) -> JSON
     return JSONResponse(
         status_code=422,
         content={"error": {"code": "VALIDATION_ERROR", "message": message, "details": details}},
+    )
+
+
+@app.exception_handler(400)
+async def bad_request_handler(request: Request, exc: Exception) -> JSONResponse:
+    message = "Bad request."
+    details: list[object] = []
+    if isinstance(exc, HTTPException):
+        message = exc.detail if isinstance(exc.detail, str) else message
+        details = exc.detail if isinstance(exc.detail, list) else []
+
+    return JSONResponse(
+        status_code=400,
+        content={"error": {"code": "BAD_REQUEST", "message": message, "details": details}},
     )
 
 
