@@ -89,7 +89,9 @@ async def create_vehicle(
             Vehicle.accident_id == accident_id
         )
     )
-    next_ref = int(current_max_ref or 0) + 1
+    if current_max_ref is None:
+        raise HTTPException(status_code=500, detail="Failed to allocate vehicle reference.")
+    next_ref = current_max_ref + 1
 
     created = Vehicle(
         accident_id=accident_id,
@@ -138,8 +140,7 @@ async def patch_vehicle(
 
 
 async def delete_vehicle(session: AsyncSession, accident_id: str, vehicle_ref: int) -> None:
-    accident = await _lock_accident(session, accident_id)
-
+    await _ensure_accident_exists(session, accident_id)
     vehicle_exists = await session.scalar(
         select(Vehicle.id).where(
             Vehicle.accident_id == accident_id,
@@ -147,8 +148,9 @@ async def delete_vehicle(session: AsyncSession, accident_id: str, vehicle_ref: i
         )
     )
     if vehicle_exists is None:
-        await session.rollback()
         raise HTTPException(status_code=404, detail="Vehicle not found.")
+
+    accident = await _lock_accident(session, accident_id)
 
     # Keep casualty rows valid before removing the referenced vehicle row.
     await session.execute(
@@ -156,11 +158,14 @@ async def delete_vehicle(session: AsyncSession, accident_id: str, vehicle_ref: i
         .where(Casualty.accident_id == accident_id, Casualty.vehicle_ref == vehicle_ref)
         .values(vehicle_ref=None)
     )
-    await session.execute(
+    deleted_id = await session.scalar(
         delete(Vehicle).where(
             Vehicle.accident_id == accident_id,
             Vehicle.vehicle_ref == vehicle_ref,
-        )
+        ).returning(Vehicle.id)
     )
+    if deleted_id is None:
+        raise HTTPException(status_code=404, detail="Vehicle not found.")
+
     accident.number_of_vehicles = max(accident.number_of_vehicles - 1, 0)
     await session.commit()
