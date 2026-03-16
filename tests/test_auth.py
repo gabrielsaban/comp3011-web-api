@@ -53,6 +53,13 @@ async def test_editor_token_can_access_editor_route(client: AsyncClient) -> None
     assert response.json() == {"status": "ok", "role": "editor"}
 
 
+async def test_admin_token_can_access_editor_route(client: AsyncClient) -> None:
+    admin_token = create_access_token(subject="admin-user", role="admin")
+    response = await client.post("/_auth/editor-check", headers=_bearer(admin_token))
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "role": "admin"}
+
+
 async def test_editor_token_cannot_access_admin_route(client: AsyncClient) -> None:
     editor_token = create_access_token(subject="editor-user", role="editor")
     response = await client.post("/_auth/admin-check", headers=_bearer(editor_token))

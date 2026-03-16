@@ -33,7 +33,11 @@ async def not_found_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=404,
         content={
-            "error": {"code": "NOT_FOUND", "message": "The requested resource was not found."}
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "The requested resource was not found.",
+                "details": [],
+            }
         },
     )
 
@@ -42,5 +46,11 @@ async def not_found_handler(request: Request, exc: Exception) -> JSONResponse:
 async def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=500,
-        content={"error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred."}},
+        content={
+            "error": {
+                "code": "INTERNAL_ERROR",
+                "message": "An unexpected error occurred.",
+                "details": [],
+            }
+        },
     )

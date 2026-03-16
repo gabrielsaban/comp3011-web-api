@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, cast
 
 import jwt
 from fastapi import HTTPException
@@ -74,4 +74,4 @@ def decode_access_token(token: str) -> AuthUser:
             message="Invalid token role.",
         )
 
-    return AuthUser(sub=subject, role=role)
+    return AuthUser(sub=subject, role=cast(Role, role))
