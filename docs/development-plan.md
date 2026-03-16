@@ -106,8 +106,8 @@ Deliverables:
 - Token issuance strategy for local/demo/testing:
   - signed tokens via shared secret in config
   - helper utility (`scripts/mint_token.py`) for non-interactive token generation
-- Temporary hidden auth probe routes are permitted for Phase 2 positive auth tests only;
-  remove them in Phase 3 once real protected write endpoints exist.
+- Hidden auth probe routes (`/_auth/*`) remain as stable internal auth smoke-test targets
+  across phases; they stay out of OpenAPI via `include_in_schema=False`.
 
 Exit criteria:
 
