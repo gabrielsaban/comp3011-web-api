@@ -85,6 +85,21 @@ async def test_post_casualty_invalid_vehicle_ref_returns_422(
     assert any(error["loc"][-1] == "vehicle_ref" for error in body["details"])
 
 
+async def test_post_casualty_invalid_severity_id_returns_422(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "minimal_crud")
+    token = create_access_token(subject="editor-user", role="editor")
+    response = await client.post(
+        "/api/v1/accidents/2022010012345/casualties",
+        json={"severity_id": 999, "vehicle_ref": 1, "age": 29},
+        headers=_bearer(token),
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 async def test_post_casualty_assigns_next_ref_updates_count_and_derives_age_band(
     client: AsyncClient,
     db_session: AsyncSession,
@@ -187,6 +202,9 @@ async def test_patch_casualty_invalid_vehicle_ref_returns_422(
         headers=_bearer(token),
     )
     assert response.status_code == 422
+    body = response.json()["error"]
+    assert body["code"] == "VALIDATION_ERROR"
+    assert any(error["loc"][-1] == "vehicle_ref" for error in body["details"])
 
 
 async def test_patch_casualty_not_found_returns_404(
@@ -243,6 +261,15 @@ async def test_delete_casualty_not_found_returns_404(
     admin = create_access_token(subject="admin-user", role="admin")
     response = await client.delete(
         "/api/v1/accidents/2022010012345/casualties/99",
+        headers=_bearer(admin),
+    )
+    assert response.status_code == 404
+
+
+async def test_delete_casualty_unknown_accident_returns_404(client: AsyncClient) -> None:
+    admin = create_access_token(subject="admin-user", role="admin")
+    response = await client.delete(
+        "/api/v1/accidents/does-not-exist/casualties/1",
         headers=_bearer(admin),
     )
     assert response.status_code == 404
