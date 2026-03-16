@@ -34,9 +34,7 @@ async def _ensure_accident_exists(session: AsyncSession, accident_id: str) -> No
 
 async def _lock_accident(session: AsyncSession, accident_id: str) -> Accident:
     locked = (
-        await session.scalars(
-            select(Accident).where(Accident.id == accident_id).with_for_update()
-        )
+        await session.scalars(select(Accident).where(Accident.id == accident_id).with_for_update())
     ).first()
     if locked is None:
         raise HTTPException(status_code=404, detail="Accident not found.")
@@ -159,10 +157,12 @@ async def delete_vehicle(session: AsyncSession, accident_id: str, vehicle_ref: i
         .values(vehicle_ref=None)
     )
     deleted_id = await session.scalar(
-        delete(Vehicle).where(
+        delete(Vehicle)
+        .where(
             Vehicle.accident_id == accident_id,
             Vehicle.vehicle_ref == vehicle_ref,
-        ).returning(Vehicle.id)
+        )
+        .returning(Vehicle.id)
     )
     if deleted_id is None:
         raise HTTPException(status_code=404, detail="Vehicle not found.")
