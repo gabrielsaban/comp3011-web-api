@@ -3,7 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.auth import AuthError
-from app.routers import accidents, auth_probe, health
+from app.routers import accidents, auth_probe, health, vehicles
 
 app = FastAPI(
     title="UK Road Traffic Accidents API",
@@ -19,6 +19,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(auth_probe.router)
 app.include_router(accidents.router)
+app.include_router(vehicles.router)
 
 
 @app.exception_handler(RequestValidationError)

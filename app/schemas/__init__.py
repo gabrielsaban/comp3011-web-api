@@ -6,6 +6,11 @@ from app.schemas.accident import (
     AccidentListItem,
     AccidentListResponse,
     AccidentPatch,
+    VehicleCollectionResponse,
+    VehicleCreate,
+    VehicleItemResponse,
+    VehiclePatch,
+    VehicleResponse,
 )
 
 __all__ = [
@@ -16,4 +21,9 @@ __all__ = [
     "AccidentListItem",
     "AccidentListResponse",
     "AccidentPatch",
+    "VehicleCollectionResponse",
+    "VehicleCreate",
+    "VehicleItemResponse",
+    "VehiclePatch",
+    "VehicleResponse",
 ]

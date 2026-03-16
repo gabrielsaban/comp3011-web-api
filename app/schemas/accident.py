@@ -144,3 +144,35 @@ class AccidentPatch(BaseModel):
         if value is not None:
             raise ValueError("This field is managed by the API and cannot be patched.")
         return value
+
+
+class VehicleCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vehicle_type_id: int | None = None
+    age_of_driver: int | None = Field(default=None, ge=0)
+    sex_of_driver: Literal["Male", "Female", "Not known"] | None = None
+    engine_capacity_cc: int | None = Field(default=None, ge=0)
+    propulsion_code: str | None = None
+    age_of_vehicle: int | None = Field(default=None, ge=0)
+    journey_purpose: str | None = None
+
+
+class VehiclePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vehicle_type_id: int | None = None
+    age_of_driver: int | None = Field(default=None, ge=0)
+    sex_of_driver: Literal["Male", "Female", "Not known"] | None = None
+    engine_capacity_cc: int | None = Field(default=None, ge=0)
+    propulsion_code: str | None = None
+    age_of_vehicle: int | None = Field(default=None, ge=0)
+    journey_purpose: str | None = None
+
+
+class VehicleCollectionResponse(BaseModel):
+    data: list[VehicleResponse]
+
+
+class VehicleItemResponse(BaseModel):
+    data: VehicleResponse
