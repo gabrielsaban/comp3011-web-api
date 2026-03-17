@@ -257,6 +257,17 @@ Exit criteria:
   - stable numeric `cluster.id` values across reruns are not required
 - Startup cache values are available to dependent services.
 
+Operational smoke-check commands:
+
+- Validate source integrity before load:
+  - `uv run scripts/import.py --mode validate --stats19-root <path> --lad-lookup <file> --midas-weather-root <path> --midas-rain-root <path>`
+- Run full refresh import for the project window:
+  - `uv run scripts/import.py --mode run --year-from 2019 --year-to 2023 ...`
+- Determinism check:
+  - run the same `--mode run` command twice on unchanged inputs
+  - compare stable aggregates (table counts, weather-link count, cluster member totals, cache totals)
+  - do not compare raw `cluster.id` values
+
 ### Phase 8: Route Risk Engine
 
 Deliverables:

@@ -11,7 +11,7 @@ from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import bindparam, func, insert, select, text, true, update
+from sqlalchemy import func, insert, select, text, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -472,15 +472,14 @@ async def _truncate_for_full_refresh(session: AsyncSession) -> None:
     await session.execute(
         text("TRUNCATE weather_observation, weather_station RESTART IDENTITY CASCADE")
     )
-    await session.execute(text("TRUNCATE cluster RESTART IDENTITY CASCADE"))
+    await session.execute(text("DELETE FROM cluster"))
     await session.execute(text("TRUNCATE local_authority, region RESTART IDENTITY CASCADE"))
 
     # Lookup tables are static reference data and are kept across runs.
     await session.execute(
         text(
-            "DELETE FROM severity; DELETE FROM road_type; DELETE FROM junction_detail; "
-            "DELETE FROM light_condition; DELETE FROM weather_condition; "
-            "DELETE FROM road_surface; DELETE FROM vehicle_type;"
+            "TRUNCATE severity, road_type, junction_detail, light_condition, "
+            "weather_condition, road_surface, vehicle_type RESTART IDENTITY CASCADE"
         )
     )
 
@@ -490,13 +489,12 @@ async def _truncate_for_stats19_reload(session: AsyncSession) -> None:
         text("UPDATE accident SET weather_observation_id = NULL, cluster_id = NULL")
     )
     await session.execute(text("TRUNCATE vehicle, casualty, accident RESTART IDENTITY CASCADE"))
-    await session.execute(text("TRUNCATE cluster RESTART IDENTITY CASCADE"))
+    await session.execute(text("DELETE FROM cluster"))
     await session.execute(text("TRUNCATE local_authority, region RESTART IDENTITY CASCADE"))
     await session.execute(
         text(
-            "DELETE FROM severity; DELETE FROM road_type; DELETE FROM junction_detail; "
-            "DELETE FROM light_condition; DELETE FROM weather_condition; "
-            "DELETE FROM road_surface; DELETE FROM vehicle_type;"
+            "TRUNCATE severity, road_type, junction_detail, light_condition, "
+            "weather_condition, road_surface, vehicle_type RESTART IDENTITY CASCADE"
         )
     )
 
@@ -902,10 +900,9 @@ async def enrich_accidents_with_midas(session: AsyncSession) -> int:
             (row.accident_id, accident_at)
         )
 
-    update_stmt = (
-        update(Accident)
-        .where(Accident.id == bindparam("p_accident_id"))
-        .values(weather_observation_id=bindparam("p_weather_observation_id"))
+    update_stmt = text(
+        "UPDATE accident SET weather_observation_id = :weather_observation_id "
+        "WHERE id = :accident_id"
     )
 
     update_batch: list[dict[str, Any]] = []
@@ -934,8 +931,8 @@ async def enrich_accidents_with_midas(session: AsyncSession) -> int:
 
             update_batch.append(
                 {
-                    "p_accident_id": accident_id,
-                    "p_weather_observation_id": nearest_observation_id,
+                    "accident_id": accident_id,
+                    "weather_observation_id": nearest_observation_id,
                 }
             )
             if len(update_batch) >= CHUNK_SIZE:
@@ -952,7 +949,7 @@ async def enrich_accidents_with_midas(session: AsyncSession) -> int:
 
 async def recompute_dbscan_clusters(session: AsyncSession) -> tuple[int, int]:
     await session.execute(text("UPDATE accident SET cluster_id = NULL"))
-    await session.execute(text("TRUNCATE cluster RESTART IDENTITY CASCADE"))
+    await session.execute(text("DELETE FROM cluster"))
 
     accident_rows = list(
         await session.execute(
@@ -1059,10 +1056,8 @@ async def recompute_dbscan_clusters(session: AsyncSession) -> tuple[int, int]:
     if not inserted_cluster_ids:
         return 0, 0
 
-    cluster_update_stmt = (
-        update(Accident)
-        .where(Accident.id == bindparam("p_accident_id"))
-        .values(cluster_id=bindparam("p_cluster_id"))
+    cluster_update_stmt = text(
+        "UPDATE accident SET cluster_id = :cluster_id WHERE id = :accident_id"
     )
 
     assignment_batch: list[dict[str, Any]] = []
@@ -1071,8 +1066,8 @@ async def recompute_dbscan_clusters(session: AsyncSession) -> tuple[int, int]:
         for accident_id in accident_ids_by_label[label]:
             assignment_batch.append(
                 {
-                    "p_accident_id": accident_id,
-                    "p_cluster_id": int(cluster_id),
+                    "accident_id": accident_id,
+                    "cluster_id": int(cluster_id),
                 }
             )
             if len(assignment_batch) >= CHUNK_SIZE:
