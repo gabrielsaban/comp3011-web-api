@@ -1,5 +1,6 @@
 from . import (
     accident_service,
+    analytics_service,
     casualty_service,
     cluster_service,
     reference_service,
@@ -10,6 +11,7 @@ from . import (
 
 __all__ = [
     "accident_service",
+    "analytics_service",
     "vehicle_service",
     "casualty_service",
     "weather_service",
