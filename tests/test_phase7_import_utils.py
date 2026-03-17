@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+from datetime import datetime
 from pathlib import Path
 
 from app.core.badc_csv import (
@@ -23,6 +25,10 @@ from app.core.import_normalization import (
     parse_stats19_date,
     parse_stats19_time,
 )
+
+import_module = importlib.import_module("scripts.import")
+cluster_severity_label = import_module._cluster_severity_label
+nearest_observation_id = import_module._nearest_observation_id
 
 
 def test_stats19_date_and_time_parsing() -> None:
@@ -110,3 +116,26 @@ def test_badc_helpers_and_row_iteration(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0]["ob_time"] == "2023-01-01 09:00:00"
     assert rows[0]["air_temperature"] == "4.5"
+
+
+def test_cluster_severity_label_thresholds() -> None:
+    assert cluster_severity_label(0.5) == "Low"
+    assert cluster_severity_label(1.5) == "Medium"
+    assert cluster_severity_label(4.0) == "High"
+    assert cluster_severity_label(9.0) == "Critical"
+
+
+def test_nearest_observation_id_respects_one_hour_window() -> None:
+    observed_times = [
+        datetime(2023, 1, 1, 9, 0, 0),
+        datetime(2023, 1, 1, 10, 0, 0),
+    ]
+    observed_ids = [101, 102]
+
+    assert (
+        nearest_observation_id(observed_times, observed_ids, datetime(2023, 1, 1, 9, 35, 0)) == 102
+    )
+    assert (
+        nearest_observation_id(observed_times, observed_ids, datetime(2023, 1, 1, 11, 30, 0))
+        is None
+    )

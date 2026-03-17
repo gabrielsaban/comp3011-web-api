@@ -3,18 +3,21 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+from bisect import bisect_left
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
+from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import insert, text
+from sqlalchemy import bindparam, func, insert, select, text, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core import derive_age_band
 from app.core.badc_csv import file_looks_like_html, iter_badc_data_rows, parse_badc_metadata
+from app.core.cache import build_startup_caches
 from app.core.import_normalization import (
     is_usable_q_flag,
     normalize_casualty_vehicle_ref,
@@ -36,6 +39,7 @@ from app.database import AsyncSessionLocal
 from app.models import (
     Accident,
     Casualty,
+    Cluster,
     JunctionDetail,
     LightCondition,
     LocalAuthority,
@@ -57,6 +61,11 @@ LAD_GLOB = "*Local_Authority_District*Lookup*.csv"
 QCV_YEAR_RE = re.compile(r"_qcv-1_(\d{4})\.csv$")
 
 CHUNK_SIZE = 5000
+EARTH_RADIUS_KM = 6371.0
+WEATHER_MATCH_RADIUS_KM = 30.0
+WEATHER_MATCH_WINDOW = timedelta(hours=1)
+DBSCAN_EPS_KM = 0.89
+DBSCAN_MIN_SAMPLES = 10
 
 STATS19_REQUIRED_COLUMNS: dict[str, set[str]] = {
     "collisions": {
@@ -760,6 +769,324 @@ def _parse_rain_qcv_file(path: Path) -> tuple[int | None, dict[Any, ObservationR
     return station_id, rows_by_time
 
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    d_lat = radians(lat2 - lat1)
+    d_lon = radians(lon2 - lon1)
+    a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lon / 2) ** 2
+    return EARTH_RADIUS_KM * 2 * asin(sqrt(a))
+
+
+def _haversine_sql_km(lat1: Any, lon1: Any, lat2: Any, lon2: Any) -> Any:
+    d_lat = func.radians(lat2 - lat1)
+    d_lon = func.radians(lon2 - lon1)
+    a = func.pow(func.sin(d_lat / 2), 2) + func.cos(func.radians(lat1)) * func.cos(
+        func.radians(lat2)
+    ) * func.pow(func.sin(d_lon / 2), 2)
+    return 2 * EARTH_RADIUS_KM * func.asin(func.sqrt(a))
+
+
+def _percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+
+    rank = (len(ordered) - 1) * q
+    lo = int(rank)
+    hi = min(lo + 1, len(ordered) - 1)
+    if lo == hi:
+        return ordered[lo]
+    weight = rank - lo
+    return ordered[lo] * (1.0 - weight) + ordered[hi] * weight
+
+
+def _cluster_severity_label(fatal_rate_pct: float) -> str:
+    if fatal_rate_pct > 5.0:
+        return "Critical"
+    if fatal_rate_pct > 2.0:
+        return "High"
+    if fatal_rate_pct > 1.0:
+        return "Medium"
+    return "Low"
+
+
+def _nearest_observation_id(
+    observed_times: list[datetime],
+    observed_ids: list[int],
+    target: datetime,
+) -> int | None:
+    if not observed_times:
+        return None
+
+    idx = bisect_left(observed_times, target)
+    best_index: int | None = None
+    best_delta: timedelta | None = None
+
+    for candidate in (idx - 1, idx):
+        if candidate < 0 or candidate >= len(observed_times):
+            continue
+        delta = abs(observed_times[candidate] - target)
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_index = candidate
+
+    if best_index is None or best_delta is None or best_delta > WEATHER_MATCH_WINDOW:
+        return None
+    return observed_ids[best_index]
+
+
+def _nearest_local_authority_id(
+    centroid_lat: float,
+    centroid_lng: float,
+    local_authority_centroids: list[tuple[int, float, float]],
+) -> int | None:
+    if not local_authority_centroids:
+        return None
+
+    nearest_id: int | None = None
+    nearest_distance: float | None = None
+    for local_authority_id, lat, lng in local_authority_centroids:
+        distance = _haversine_km(centroid_lat, centroid_lng, lat, lng)
+        if nearest_distance is None or distance < nearest_distance:
+            nearest_id = local_authority_id
+            nearest_distance = distance
+    return nearest_id
+
+
+async def enrich_accidents_with_midas(session: AsyncSession) -> int:
+    distance_km = _haversine_sql_km(
+        Accident.latitude,
+        Accident.longitude,
+        WeatherStation.latitude,
+        WeatherStation.longitude,
+    )
+    nearest_station = (
+        select(
+            WeatherStation.id.label("station_id"),
+            distance_km.label("distance_km"),
+        )
+        .where(
+            (WeatherStation.active_from.is_(None) | (WeatherStation.active_from <= Accident.date)),
+            (WeatherStation.active_to.is_(None) | (WeatherStation.active_to >= Accident.date)),
+        )
+        .order_by(distance_km.asc())
+        .limit(1)
+        .lateral()
+    )
+
+    candidate_rows = await session.execute(
+        select(
+            Accident.id.label("accident_id"),
+            Accident.date.label("accident_date"),
+            Accident.time.label("accident_time"),
+            nearest_station.c.station_id.label("station_id"),
+        )
+        .select_from(Accident)
+        .join(nearest_station, true())
+        .where(
+            Accident.latitude.is_not(None),
+            Accident.longitude.is_not(None),
+            Accident.time.is_not(None),
+            nearest_station.c.distance_km <= WEATHER_MATCH_RADIUS_KM,
+        )
+    )
+
+    candidates_by_station: dict[int, list[tuple[str, datetime]]] = {}
+    for row in candidate_rows:
+        accident_time = row.accident_time
+        if accident_time is None:
+            continue
+        accident_at = datetime.combine(row.accident_date, accident_time)
+        candidates_by_station.setdefault(int(row.station_id), []).append(
+            (row.accident_id, accident_at)
+        )
+
+    update_stmt = (
+        update(Accident)
+        .where(Accident.id == bindparam("p_accident_id"))
+        .values(weather_observation_id=bindparam("p_weather_observation_id"))
+    )
+
+    update_batch: list[dict[str, Any]] = []
+    matched_count = 0
+    for station_id, station_candidates in sorted(candidates_by_station.items()):
+        observed_rows = await session.execute(
+            select(WeatherObservation.id, WeatherObservation.observed_at)
+            .where(WeatherObservation.station_id == station_id)
+            .order_by(WeatherObservation.observed_at.asc())
+        )
+        observations = list(observed_rows)
+        if not observations:
+            continue
+
+        observed_ids = [int(observation_id) for observation_id, _ in observations]
+        observed_times = [observed_at for _, observed_at in observations]
+
+        for accident_id, accident_at in station_candidates:
+            nearest_observation_id = _nearest_observation_id(
+                observed_times=observed_times,
+                observed_ids=observed_ids,
+                target=accident_at,
+            )
+            if nearest_observation_id is None:
+                continue
+
+            update_batch.append(
+                {
+                    "p_accident_id": accident_id,
+                    "p_weather_observation_id": nearest_observation_id,
+                }
+            )
+            if len(update_batch) >= CHUNK_SIZE:
+                await session.execute(update_stmt, update_batch)
+                matched_count += len(update_batch)
+                update_batch = []
+
+    if update_batch:
+        await session.execute(update_stmt, update_batch)
+        matched_count += len(update_batch)
+
+    return matched_count
+
+
+async def recompute_dbscan_clusters(session: AsyncSession) -> tuple[int, int]:
+    await session.execute(text("UPDATE accident SET cluster_id = NULL"))
+    await session.execute(text("TRUNCATE cluster RESTART IDENTITY CASCADE"))
+
+    accident_rows = list(
+        await session.execute(
+            select(
+                Accident.id,
+                Accident.latitude,
+                Accident.longitude,
+                Accident.severity_id,
+            ).where(Accident.latitude.is_not(None), Accident.longitude.is_not(None))
+        )
+    )
+    if not accident_rows:
+        return 0, 0
+
+    try:
+        import numpy as np
+        from sklearn.cluster import DBSCAN
+    except ImportError as exc:  # pragma: no cover - dependency gate for import runtime
+        raise RuntimeError(
+            "DBSCAN clustering requires numpy and scikit-learn in the runtime environment."
+        ) from exc
+
+    coords = [(float(row.latitude), float(row.longitude)) for row in accident_rows]
+    label_array = DBSCAN(
+        eps=DBSCAN_EPS_KM / EARTH_RADIUS_KM,
+        min_samples=DBSCAN_MIN_SAMPLES,
+        metric="haversine",
+        algorithm="ball_tree",
+    ).fit_predict(np.radians(np.array(coords)))
+
+    member_indexes_by_label: dict[int, list[int]] = {}
+    for index, label in enumerate(label_array.tolist()):
+        if label < 0:
+            continue
+        member_indexes_by_label.setdefault(label, []).append(index)
+
+    if not member_indexes_by_label:
+        return 0, 0
+
+    local_authority_centroid_rows = await session.execute(
+        select(
+            Accident.local_authority_id,
+            func.avg(Accident.latitude).label("centroid_lat"),
+            func.avg(Accident.longitude).label("centroid_lng"),
+        )
+        .where(
+            Accident.local_authority_id.is_not(None),
+            Accident.latitude.is_not(None),
+            Accident.longitude.is_not(None),
+        )
+        .group_by(Accident.local_authority_id)
+    )
+    local_authority_centroids = [
+        (int(local_authority_id), float(centroid_lat), float(centroid_lng))
+        for local_authority_id, centroid_lat, centroid_lng in local_authority_centroid_rows
+        if centroid_lat is not None and centroid_lng is not None
+    ]
+
+    ordered_labels = sorted(member_indexes_by_label.keys())
+    accident_ids_by_label: dict[int, list[str]] = {}
+    cluster_rows: list[dict[str, Any]] = []
+
+    for label in ordered_labels:
+        member_indexes = member_indexes_by_label[label]
+        member_coords = [coords[index] for index in member_indexes]
+        member_rows = [accident_rows[index] for index in member_indexes]
+
+        accident_count = len(member_rows)
+        centroid_lat = sum(lat for lat, _ in member_coords) / accident_count
+        centroid_lng = sum(lng for _, lng in member_coords) / accident_count
+        radius_km = _percentile(
+            [_haversine_km(centroid_lat, centroid_lng, lat, lng) for lat, lng in member_coords],
+            0.95,
+        )
+
+        fatal_count = sum(1 for row in member_rows if int(row.severity_id) == 1)
+        serious_count = sum(1 for row in member_rows if int(row.severity_id) == 2)
+        fatal_rate_pct = (fatal_count * 100.0) / accident_count if accident_count > 0 else 0.0
+        severity_label = _cluster_severity_label(fatal_rate_pct)
+        local_authority_id = _nearest_local_authority_id(
+            centroid_lat=centroid_lat,
+            centroid_lng=centroid_lng,
+            local_authority_centroids=local_authority_centroids,
+        )
+
+        cluster_rows.append(
+            {
+                "centroid_lat": centroid_lat,
+                "centroid_lng": centroid_lng,
+                "radius_km": radius_km,
+                "accident_count": accident_count,
+                "fatal_count": fatal_count,
+                "serious_count": serious_count,
+                "fatal_rate_pct": fatal_rate_pct,
+                "severity_label": severity_label,
+                "local_authority_id": local_authority_id,
+            }
+        )
+        accident_ids_by_label[label] = [str(row.id) for row in member_rows]
+
+    inserted_cluster_ids = list(
+        (await session.execute(insert(Cluster).returning(Cluster.id), cluster_rows)).scalars()
+    )
+    if not inserted_cluster_ids:
+        return 0, 0
+
+    cluster_update_stmt = (
+        update(Accident)
+        .where(Accident.id == bindparam("p_accident_id"))
+        .values(cluster_id=bindparam("p_cluster_id"))
+    )
+
+    assignment_batch: list[dict[str, Any]] = []
+    assigned_count = 0
+    for label, cluster_id in zip(ordered_labels, inserted_cluster_ids, strict=True):
+        for accident_id in accident_ids_by_label[label]:
+            assignment_batch.append(
+                {
+                    "p_accident_id": accident_id,
+                    "p_cluster_id": int(cluster_id),
+                }
+            )
+            if len(assignment_batch) >= CHUNK_SIZE:
+                await session.execute(cluster_update_stmt, assignment_batch)
+                assigned_count += len(assignment_batch)
+                assignment_batch = []
+
+    if assignment_batch:
+        await session.execute(cluster_update_stmt, assignment_batch)
+        assigned_count += len(assignment_batch)
+
+    return len(inserted_cluster_ids), assigned_count
+
+
 async def import_stats19(
     session: AsyncSession, files: Stats19Files, lad_path: Path, year_from: int, year_to: int
 ) -> None:
@@ -1016,10 +1343,19 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
                 year_to=args.year_to,
             )
             await session.commit()
-            print(
-                "Import stage complete (raw load). "
-                "Enrichment/DBSCAN/cache recompute are implemented in the next Phase 7 slice."
-            )
+            print("Matching accidents to MIDAS observations...")
+            matched = await enrich_accidents_with_midas(session)
+            await session.commit()
+            print(f"Matched weather observations: {matched}")
+
+            print("Recomputing DBSCAN clusters...")
+            cluster_count, cluster_assignments = await recompute_dbscan_clusters(session)
+            await session.commit()
+            print(f"Clusters written: {cluster_count}; accident assignments: {cluster_assignments}")
+
+            print("Rebuilding startup caches...")
+            await build_startup_caches(session)
+            print("Full import pipeline complete.")
             return
 
         if args.mode == "stats19":
@@ -1035,7 +1371,20 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
                 year_to=args.year_to,
             )
             await session.commit()
-            print("STATS19 import complete.")
+
+            print("Matching accidents to existing MIDAS observations...")
+            matched = await enrich_accidents_with_midas(session)
+            await session.commit()
+            print(f"Matched weather observations: {matched}")
+
+            print("Recomputing DBSCAN clusters...")
+            cluster_count, cluster_assignments = await recompute_dbscan_clusters(session)
+            await session.commit()
+            print(f"Clusters written: {cluster_count}; accident assignments: {cluster_assignments}")
+
+            print("Rebuilding startup caches...")
+            await build_startup_caches(session)
+            print("STATS19-only reload complete.")
             return
 
         if args.mode == "midas":
@@ -1051,7 +1400,15 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
                 year_to=args.year_to,
             )
             await session.commit()
-            print("MIDAS import complete.")
+
+            print("Matching accidents to MIDAS observations...")
+            matched = await enrich_accidents_with_midas(session)
+            await session.commit()
+            print(f"Matched weather observations: {matched}")
+
+            print("Rebuilding startup caches...")
+            await build_startup_caches(session)
+            print("MIDAS-only reload complete.")
 
 
 def main() -> None:
