@@ -217,25 +217,37 @@ Cache policy:
 
 Import implementation rules:
 
-- Region/LA hierarchy source: STATS19 does not carry region information directly.
-  The ONS LAD-to-RGN lookup CSV (e.g. `Local_Authority_District_to_Region_(April_YYYY)_EN.csv`)
-  must be loaded first to resolve `local_authority.region_id` for each LA code.
-- Pedestrian `vehicle_ref`: STATS19 encodes pedestrian casualties with `vehicle_reference = 0`.
-  This must be mapped to `NULL` before insert because `casualty.vehicle_ref` participates in
-  a composite FK to `(accident_id, vehicle_ref)` and there is no vehicle row with ref 0.
-- Sentinel value normalisation (applied during CSV parsing, before insert):
-  - `speed_limit = 99` → `NULL` (STATS19 sentinel for "unknown")
-  - `urban_or_rural_area` codes: `1` → `"Urban"`, `2` → `"Rural"`, `3` → `"Unallocated"`
-  - `police_attend_scene_of_accident`: `1` → `True`, `2` → `False`, other/missing → `NULL`
-- `number_of_vehicles` and `number_of_casualties` must be populated directly from the
-  corresponding CSV columns on each accident row. They must **not** be left at the schema
-  `DEFAULT 0` or recomputed from child-row counts; the CSV values are authoritative.
-- `age_band` derivation must use a shared utility function defined once in
-  `app/core/age_band.py` and imported by both the import script and any casualty
-  service code that needs to derive it at runtime. This avoids band-boundary drift.
-- MIDAS quality control: rows where any `q_*` quality-flag column is non-zero (flagged as
-  suspect or erroneous by the Met Office QC process) must be excluded during MIDAS CSV
-  parsing. Only observations with all `q_*` flags equal to zero are inserted.
+- Source dataset contracts and normalisation (Phase 7):
+  - **STATS19 collision/vehicle/casualty CSVs** (DfT full-history files, filtered to project years):
+    - `collision_index` is the canonical accident identifier used as `accident.id`.
+    - `date` is `DD/MM/YYYY` and `time` is `HH:MM`; parse to typed values before insert.
+    - `local_authority_ons_district` is the LA code used for LAD lookup join (current data contains `E*`, `S*`, `W*`).
+    - `number_of_vehicles` and `number_of_casualties` are authoritative from the collision CSV and must not be recomputed.
+    - Normalise sentinel/missing values before model mapping:
+      - `speed_limit` unknown sentinels (`99`, and defensive handling for `-1`) -> `NULL`
+      - `urban_or_rural_area`: `1` -> `"Urban"`, `2` -> `"Rural"`, `3` -> `"Unallocated"`, other -> `NULL`
+      - `did_police_officer_attend_scene_of_accident`: `1` -> `True`, `2` -> `False`, other/missing -> `NULL`
+      - generic unknown codes (`-1`, `9`, empty string) for nullable coded dimensions -> `NULL`
+    - Pedestrian casualty linkage: if `vehicle_reference` is `0` (defensive rule for older data), map to `NULL` before insert so the composite FK `(accident_id, vehicle_ref)` remains valid.
+    - `age_band` derivation must use the shared function in `app/core/age_band.py` so import and runtime mutation paths cannot drift.
+  - **ONS LAD lookup CSV** (UK-wide LAD23 mapping):
+    - Use `LAD23CD` as join key to STATS19 `local_authority_ons_district`.
+    - Resolve local authority display name from `LAD23NM`.
+    - Resolve region from `ITL121NM` (not from STATS19 directly).
+    - Parse with UTF-8 BOM handling (`utf-8-sig`) and deduplicate by `LAD23CD` because rows can repeat due to LAU mappings.
+    - Region label normalisation for API consistency:
+      - strip `"(England)"` suffix where present
+      - map `East` -> `East of England`
+      - keep `Scotland`, `Wales`, `Northern Ireland` as country-level regions
+    - Import must emit a reconciliation report of unmatched LAD codes (fail-fast in strict mode; warn-and-skip in local exploratory mode).
+  - **MIDAS hourly-weather and hourly-rain BADC CSVs**:
+    - File shape is not plain header-first CSV: metadata block, then `data`, then header row, records, and `end data`.
+    - Station metadata comes from `*_capability.csv` (`src_id`, station name, lat/lon, height, active window).
+    - Observation records come from `*_qcv-1_YYYY.csv` within the target years; `qcv-0` files are ignored.
+    - Convert `NA` strings to `NULL` before type coercion.
+    - Keep only quality-approved values for imported metrics (reject rows/fields where relevant `*_q` flags are non-zero).
+    - Normalise metric units into API schema units (for example, visibility decametres -> metres) during parse, not at query time.
+    - Upsert observations on deterministic key `(station_id, observed_at)` to keep re-runs idempotent.
 
 Exit criteria:
 
