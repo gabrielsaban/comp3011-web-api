@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 60
 
     app_env: str = "development"
+    cache_preload_on_startup: bool = False
+
+    stats19_data_path: str = ""
+    lad_lookup_csv_path: str = ""
+    midas_hourly_weather_path: str = ""
+    midas_hourly_rain_path: str = ""
+    import_year_from: int = 2019
+    import_year_to: int = 2023
 
 
 settings = Settings()
