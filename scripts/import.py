@@ -453,6 +453,29 @@ async def _truncate_for_full_refresh(session: AsyncSession) -> None:
     )
 
 
+async def _truncate_for_stats19_reload(session: AsyncSession) -> None:
+    await session.execute(
+        text("UPDATE accident SET weather_observation_id = NULL, cluster_id = NULL")
+    )
+    await session.execute(text("TRUNCATE vehicle, casualty, accident RESTART IDENTITY CASCADE"))
+    await session.execute(text("TRUNCATE cluster RESTART IDENTITY CASCADE"))
+    await session.execute(text("TRUNCATE local_authority, region RESTART IDENTITY CASCADE"))
+    await session.execute(
+        text(
+            "DELETE FROM severity; DELETE FROM road_type; DELETE FROM junction_detail; "
+            "DELETE FROM light_condition; DELETE FROM weather_condition; "
+            "DELETE FROM road_surface; DELETE FROM vehicle_type;"
+        )
+    )
+
+
+async def _truncate_for_midas_reload(session: AsyncSession) -> None:
+    await session.execute(text("UPDATE accident SET weather_observation_id = NULL"))
+    await session.execute(
+        text("TRUNCATE weather_observation, weather_station RESTART IDENTITY CASCADE")
+    )
+
+
 def _iter_chunks(
     rows: Iterator[dict[str, Any]], size: int = CHUNK_SIZE
 ) -> Iterator[list[dict[str, Any]]]:
@@ -748,8 +771,9 @@ async def import_stats19(
 async def import_midas(
     session: AsyncSession, weather_root: Path, rain_root: Path, year_from: int, year_to: int
 ) -> None:
-    capability_files = list(weather_root.rglob("*_capability.csv")) + list(
-        rain_root.rglob("*_capability.csv")
+    capability_files = sorted(
+        list(weather_root.rglob("*_capability.csv"))
+        + list(rain_root.rglob("*_capability.csv"))
     )
     station_meta = _collect_station_metadata(capability_files)
 
@@ -945,6 +969,10 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
             return
 
         if args.mode == "stats19":
+            print("Running stats19-only teardown...")
+            await _truncate_for_stats19_reload(session)
+            await session.commit()
+
             await import_stats19(
                 session=session,
                 files=stats19_files,
@@ -957,6 +985,10 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
             return
 
         if args.mode == "midas":
+            print("Running midas-only teardown...")
+            await _truncate_for_midas_reload(session)
+            await session.commit()
+
             await import_midas(
                 session=session,
                 weather_root=paths.midas_weather_root,
