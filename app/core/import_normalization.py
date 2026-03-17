@@ -97,6 +97,13 @@ def normalize_nullable_code(raw: str | None) -> int | None:
     return parse_int(value)
 
 
+def normalize_negative_one_unknown(raw: str | None) -> int | None:
+    value = parse_int(raw)
+    if value == -1:
+        return None
+    return value
+
+
 def normalize_casualty_vehicle_ref(raw: str | None) -> int | None:
     value = parse_int(raw)
     if value is None:

@@ -11,6 +11,7 @@ from app.core.badc_csv import (
 from app.core.import_normalization import (
     is_usable_q_flag,
     normalize_casualty_vehicle_ref,
+    normalize_negative_one_unknown,
     normalize_nullable_code,
     normalize_police_attended,
     normalize_region_name,
@@ -48,6 +49,9 @@ def test_core_normalisation_rules() -> None:
     assert normalize_nullable_code("9") is None
     assert normalize_nullable_code("-1") is None
     assert normalize_nullable_code("7") == 7
+    assert normalize_negative_one_unknown("-1") is None
+    assert normalize_negative_one_unknown("9") == 9
+    assert normalize_negative_one_unknown("99") == 99
 
     assert normalize_casualty_vehicle_ref("0") is None
     assert normalize_casualty_vehicle_ref("2") == 2

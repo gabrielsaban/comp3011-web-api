@@ -18,6 +18,7 @@ from app.core.badc_csv import file_looks_like_html, iter_badc_data_rows, parse_b
 from app.core.import_normalization import (
     is_usable_q_flag,
     normalize_casualty_vehicle_ref,
+    normalize_negative_one_unknown,
     normalize_nullable_code,
     normalize_police_attended,
     normalize_region_name,
@@ -519,15 +520,18 @@ def _build_vehicle_rows(
         if not accident_id or vehicle_ref is None:
             continue
 
+        sex_of_driver_code = parse_int(row.get("sex_of_driver"))
         yield {
             "accident_id": accident_id,
             "vehicle_ref": vehicle_ref,
             "vehicle_type_id": normalize_nullable_code(row.get("vehicle_type")),
-            "age_of_driver": normalize_nullable_code(row.get("age_of_driver")),
-            "sex_of_driver": SEX_LABELS.get(parse_int(row.get("sex_of_driver")) or -1),
-            "engine_capacity_cc": normalize_nullable_code(row.get("engine_capacity_cc")),
+            "age_of_driver": normalize_negative_one_unknown(row.get("age_of_driver")),
+            "sex_of_driver": SEX_LABELS.get(sex_of_driver_code)
+            if sex_of_driver_code is not None
+            else None,
+            "engine_capacity_cc": normalize_negative_one_unknown(row.get("engine_capacity_cc")),
             "propulsion_code": (row.get("propulsion_code") or "").strip() or None,
-            "age_of_vehicle": normalize_nullable_code(row.get("age_of_vehicle")),
+            "age_of_vehicle": normalize_negative_one_unknown(row.get("age_of_vehicle")),
             "journey_purpose": (row.get("journey_purpose_of_driver") or "").strip() or None,
         }
 
@@ -542,11 +546,17 @@ def _build_casualty_rows(
         if not accident_id or casualty_ref is None or severity_id is None:
             continue
 
-        age = normalize_nullable_code(row.get("age_of_casualty"))
-        casualty_class = CASUALTY_CLASS_LABELS.get(parse_int(row.get("casualty_class")) or -1)
-        sex = SEX_LABELS.get(parse_int(row.get("sex_of_casualty")) or -1)
+        age = normalize_negative_one_unknown(row.get("age_of_casualty"))
+        casualty_class_code = parse_int(row.get("casualty_class"))
+        sex_code = parse_int(row.get("sex_of_casualty"))
+        casualty_class = (
+            CASUALTY_CLASS_LABELS.get(casualty_class_code)
+            if casualty_class_code is not None
+            else None
+        )
+        sex = SEX_LABELS.get(sex_code) if sex_code is not None else None
 
-        casualty_type_code = normalize_nullable_code(row.get("casualty_type"))
+        casualty_type_code = normalize_negative_one_unknown(row.get("casualty_type"))
         casualty_type = str(casualty_type_code) if casualty_type_code is not None else None
 
         yield {
