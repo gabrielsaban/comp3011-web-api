@@ -138,12 +138,10 @@ class AccidentPatch(BaseModel):
     number_of_vehicles: int | None = None
     number_of_casualties: int | None = None
 
-    @field_validator("number_of_vehicles", "number_of_casualties")
+    @field_validator("number_of_vehicles", "number_of_casualties", mode="before")
     @classmethod
-    def reject_count_fields(cls, value: int | None) -> int | None:
-        if value is not None:
-            raise ValueError("This field is managed by the API and cannot be patched.")
-        return value
+    def reject_count_fields(cls, value: object) -> object:
+        raise ValueError("This field is managed by the API and cannot be patched.")
 
 
 class VehicleCreate(BaseModel):

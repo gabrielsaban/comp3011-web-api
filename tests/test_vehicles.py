@@ -185,6 +185,37 @@ async def test_delete_vehicle_nulls_casualty_link_and_decrements_count(
     assert accident["casualties"][0]["vehicle_ref"] is None
 
 
+async def test_vehicle_count_roundtrip_create_then_delete_restores_baseline(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "minimal_crud")
+    editor = create_access_token(subject="editor-user", role="editor")
+    admin = create_access_token(subject="admin-user", role="admin")
+
+    create_response = await client.post(
+        "/api/v1/accidents/2022010012345/vehicles",
+        json={"vehicle_type_id": 11},
+        headers=_bearer(editor),
+    )
+    assert create_response.status_code == 201
+    new_ref = create_response.json()["data"]["vehicle_ref"]
+
+    after_create = await client.get("/api/v1/accidents/2022010012345")
+    assert after_create.status_code == 200
+    assert after_create.json()["data"]["number_of_vehicles"] == 2
+
+    delete_response = await client.delete(
+        f"/api/v1/accidents/2022010012345/vehicles/{new_ref}",
+        headers=_bearer(admin),
+    )
+    assert delete_response.status_code == 204
+
+    after_delete = await client.get("/api/v1/accidents/2022010012345")
+    assert after_delete.status_code == 200
+    assert after_delete.json()["data"]["number_of_vehicles"] == 1
+
+
 async def test_delete_vehicle_not_found_returns_404(
     client: AsyncClient,
     db_session: AsyncSession,

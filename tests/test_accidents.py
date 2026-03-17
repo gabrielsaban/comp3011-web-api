@@ -1,7 +1,10 @@
+import pytest
 from httpx import AsyncClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import create_access_token
+from app.models.accident import Casualty, Vehicle
 from tests.fixtures import seed_profile
 
 
@@ -162,21 +165,32 @@ async def test_post_accident_with_editor_creates_record(
     assert data["number_of_casualties"] == 0
 
 
+@pytest.mark.parametrize(
+    ("payload", "field_name"),
+    [
+        ({"number_of_vehicles": 10}, "number_of_vehicles"),
+        ({"number_of_vehicles": None}, "number_of_vehicles"),
+        ({"number_of_casualties": 10}, "number_of_casualties"),
+        ({"number_of_casualties": None}, "number_of_casualties"),
+    ],
+)
 async def test_patch_accident_rejects_count_fields(
     client: AsyncClient,
     db_session: AsyncSession,
+    payload: dict[str, int | None],
+    field_name: str,
 ) -> None:
     await seed_profile(db_session, "minimal_crud")
     token = create_access_token(subject="editor-user", role="editor")
     response = await client.patch(
         "/api/v1/accidents/2022010012345",
-        json={"number_of_vehicles": 10},
+        json=payload,
         headers=_bearer(token),
     )
     assert response.status_code == 422
     error = response.json()["error"]
     assert error["code"] == "VALIDATION_ERROR"
-    assert any(err["loc"][-1] == "number_of_vehicles" for err in error["details"])
+    assert any(err["loc"][-1] == field_name for err in error["details"])
 
 
 async def test_get_accident_not_found_returns_404(client: AsyncClient) -> None:
@@ -244,3 +258,25 @@ async def test_delete_accident_with_admin_returns_204(
 
     fetch_response = await client.get("/api/v1/accidents/2022010012345")
     assert fetch_response.status_code == 404
+
+
+async def test_delete_accident_cascades_to_vehicle_and_casualty_rows(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "minimal_crud")
+    admin = create_access_token(subject="admin-user", role="admin")
+    delete_response = await client.delete(
+        "/api/v1/accidents/2022010012345",
+        headers=_bearer(admin),
+    )
+    assert delete_response.status_code == 204
+
+    vehicle_rows = await db_session.scalar(
+        select(func.count()).select_from(Vehicle).where(Vehicle.accident_id == "2022010012345")
+    )
+    casualty_rows = await db_session.scalar(
+        select(func.count()).select_from(Casualty).where(Casualty.accident_id == "2022010012345")
+    )
+    assert int(vehicle_rows or 0) == 0
+    assert int(casualty_rows or 0) == 0
