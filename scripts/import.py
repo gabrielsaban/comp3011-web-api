@@ -795,8 +795,7 @@ async def import_midas(
     session: AsyncSession, weather_root: Path, rain_root: Path, year_from: int, year_to: int
 ) -> None:
     capability_files = sorted(
-        list(weather_root.rglob("*_capability.csv"))
-        + list(rain_root.rglob("*_capability.csv"))
+        list(weather_root.rglob("*_capability.csv")) + list(rain_root.rglob("*_capability.csv"))
     )
     station_meta = _collect_station_metadata(capability_files)
 
