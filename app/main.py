@@ -1,8 +1,14 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.core.auth import AuthError
+from app.core.cache import build_startup_caches, reset_startup_caches
+from app.database import AsyncSessionLocal
 from app.routers import (
     accidents,
     analytics,
@@ -17,6 +23,17 @@ from app.routers import (
     weather_stations,
 )
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    if settings.cache_preload_on_startup:
+        async with AsyncSessionLocal() as session:
+            await build_startup_caches(session)
+    else:
+        reset_startup_caches()
+    yield
+
+
 app = FastAPI(
     title="UK Road Traffic Accidents API",
     description=(
@@ -26,6 +43,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 app.include_router(health.router)
