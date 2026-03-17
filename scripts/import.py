@@ -58,6 +58,29 @@ QCV_YEAR_RE = re.compile(r"_qcv-1_(\d{4})\.csv$")
 
 CHUNK_SIZE = 5000
 
+STATS19_REQUIRED_COLUMNS: dict[str, set[str]] = {
+    "collisions": {
+        "collision_index",
+        "collision_year",
+        "date",
+        "time",
+        "local_authority_ons_district",
+        "collision_severity",
+    },
+    "vehicles": {
+        "collision_index",
+        "collision_year",
+        "vehicle_reference",
+        "vehicle_type",
+    },
+    "casualties": {
+        "collision_index",
+        "collision_year",
+        "casualty_reference",
+        "casualty_severity",
+    },
+}
+
 
 @dataclass
 class ImportPaths:
@@ -884,6 +907,37 @@ def validate_midas_tree(root: Path, label: str) -> list[str]:
     return errors
 
 
+def validate_stats19_files(files: Stats19Files) -> list[str]:
+    errors: list[str] = []
+    file_map = {
+        "collisions": files.collisions,
+        "vehicles": files.vehicles,
+        "casualties": files.casualties,
+    }
+
+    for name, path in file_map.items():
+        if file_looks_like_html(path):
+            errors.append(f"[stats19:{name}] appears to be HTML auth content: {path}")
+            continue
+
+        try:
+            with path.open(encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = set(reader.fieldnames or [])
+        except OSError as exc:
+            errors.append(f"[stats19:{name}] failed to open/read file: {path} ({exc})")
+            continue
+
+        required = STATS19_REQUIRED_COLUMNS[name]
+        missing = sorted(required - fieldnames)
+        if missing:
+            errors.append(
+                f"[stats19:{name}] missing expected columns: {', '.join(missing)} ({path})"
+            )
+
+    return errors
+
+
 def _default_paths_from_settings() -> ImportPaths:
     stats19_root = Path(settings.stats19_data_path)
     lad_lookup = Path(settings.lad_lookup_csv_path)
@@ -928,6 +982,7 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
 
     if args.mode == "validate":
         errors: list[str] = []
+        errors.extend(validate_stats19_files(stats19_files))
         errors.extend(validate_midas_tree(paths.midas_weather_root, "hourly-weather"))
         errors.extend(validate_midas_tree(paths.midas_rain_root, "hourly-rain"))
         if errors:
