@@ -29,6 +29,8 @@ from app.core.import_normalization import (
 import_module = importlib.import_module("scripts.import")
 cluster_severity_label = import_module._cluster_severity_label
 nearest_observation_id = import_module._nearest_observation_id
+unmatched_lad_codes = import_module._unmatched_lad_codes
+LadRecord = import_module.LadRecord
 
 
 def test_stats19_date_and_time_parsing() -> None:
@@ -75,7 +77,8 @@ def test_region_and_weather_value_normalisation() -> None:
     assert normalize_wind_speed_ms("10.0", "4") == 10.0 * 0.514444
     assert normalize_wind_speed_ms("NA", "1") is None
 
-    assert is_usable_q_flag("6") is True
+    assert is_usable_q_flag("0") is True
+    assert is_usable_q_flag("6") is False
     assert is_usable_q_flag("9") is False
     assert is_usable_q_flag("NA") is False
 
@@ -90,6 +93,8 @@ def test_badc_helpers_and_row_iteration(tmp_path: Path) -> None:
         "observation_station,G,test-station\n"
         "src_id,G,00123\n"
         "location,G,53.8,-1.5\n"
+        "height,G,112,m\n"
+        "date_valid,G,2019-01-01 00:00:00,2023-12-31 23:59:59\n"
         "data\n"
         "ob_time,src_id,air_temperature,air_temperature_q\n"
         "2023-01-01 09:00:00,123,4.5,6\n"
@@ -111,6 +116,9 @@ def test_badc_helpers_and_row_iteration(tmp_path: Path) -> None:
     metadata = parse_badc_metadata(badc_file)
     assert metadata["observation_station"][0] == "test-station"
     assert metadata["src_id"][0] == "00123"
+    assert metadata["location"][0] == "53.8,-1.5"
+    assert metadata["height"][0] == "112"
+    assert metadata["date_valid"][0] == "2019-01-01 00:00:00,2023-12-31 23:59:59"
 
     rows = list(iter_badc_data_rows(badc_file))
     assert len(rows) == 1
@@ -139,3 +147,12 @@ def test_nearest_observation_id_respects_one_hour_window() -> None:
         nearest_observation_id(observed_times, observed_ids, datetime(2023, 1, 1, 11, 30, 0))
         is None
     )
+
+
+def test_unmatched_lad_code_detection() -> None:
+    lad_map = {
+        "E09000001": LadRecord(code="E09000001", name="City of London", region_name="London"),
+        "W06000015": LadRecord(code="W06000015", name="Cardiff", region_name="Wales"),
+    }
+    unmatched = unmatched_lad_codes({"E09000001", "S12000049", "W06000015"}, lad_map)
+    assert unmatched == ["S12000049"]

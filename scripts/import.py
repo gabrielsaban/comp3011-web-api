@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, insert, select, text, true
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -352,6 +353,12 @@ def _load_lad_records(path: Path) -> dict[str, LadRecord]:
             region = normalize_region_name((row.get("ITL121NM") or "Unknown").strip())
             records[code] = LadRecord(code=code, name=name, region_name=region)
     return records
+
+
+def _unmatched_lad_codes(
+    collision_la_codes: set[str], lad_by_code: dict[str, LadRecord]
+) -> list[str]:
+    return sorted(code for code in collision_la_codes if code not in lad_by_code)
 
 
 async def _load_lookup_tables(session: AsyncSession, codes: LookupCodeSets) -> None:
@@ -868,7 +875,7 @@ async def enrich_accidents_with_midas(session: AsyncSession) -> int:
             (WeatherStation.active_from.is_(None) | (WeatherStation.active_from <= Accident.date)),
             (WeatherStation.active_to.is_(None) | (WeatherStation.active_to >= Accident.date)),
         )
-        .order_by(distance_km.asc())
+        .order_by(distance_km.asc(), WeatherStation.id.asc())
         .limit(1)
         .lateral()
     )
@@ -958,7 +965,9 @@ async def recompute_dbscan_clusters(session: AsyncSession) -> tuple[int, int]:
                 Accident.latitude,
                 Accident.longitude,
                 Accident.severity_id,
-            ).where(Accident.latitude.is_not(None), Accident.longitude.is_not(None))
+            )
+            .where(Accident.latitude.is_not(None), Accident.longitude.is_not(None))
+            .order_by(Accident.id.asc())
         )
     )
     if not accident_rows:
@@ -1083,13 +1092,30 @@ async def recompute_dbscan_clusters(session: AsyncSession) -> tuple[int, int]:
 
 
 async def import_stats19(
-    session: AsyncSession, files: Stats19Files, lad_path: Path, year_from: int, year_to: int
+    session: AsyncSession,
+    files: Stats19Files,
+    lad_path: Path,
+    year_from: int,
+    year_to: int,
+    strict_lad_reconciliation: bool = True,
 ) -> None:
     lookup_codes = _scan_lookup_codes(files, year_from, year_to)
     await _load_lookup_tables(session, lookup_codes)
 
     lad_by_code = _load_lad_records(lad_path)
     la_fallback_names = _collect_local_authority_inputs(files.collisions, year_from, year_to)
+    unmatched_codes = _unmatched_lad_codes(set(la_fallback_names), lad_by_code)
+    if unmatched_codes:
+        sample = ", ".join(unmatched_codes[:15])
+        message = (
+            f"Unmatched LAD codes in STATS19 collisions: {len(unmatched_codes)} (sample: {sample})."
+        )
+        if strict_lad_reconciliation:
+            raise ValueError(
+                f"{message} Use --lad-reconciliation warn to continue with fallback names."
+            )
+        print(f"WARNING: {message} Using fallback local authority names and Unknown region.")
+
     local_authority_id_by_code = await _load_regions_and_local_authorities(
         session=session,
         lad_by_code=lad_by_code,
@@ -1145,6 +1171,23 @@ async def import_midas(
 
     observation_batch: list[dict[str, Any]] = []
 
+    async def flush_observation_batch() -> None:
+        nonlocal observation_batch
+        if not observation_batch:
+            return
+        statement = pg_insert(WeatherObservation).values(observation_batch)
+        statement = statement.on_conflict_do_update(
+            index_elements=[WeatherObservation.station_id, WeatherObservation.observed_at],
+            set_={
+                "temperature_c": statement.excluded.temperature_c,
+                "precipitation_mm": statement.excluded.precipitation_mm,
+                "wind_speed_ms": statement.excluded.wind_speed_ms,
+                "visibility_m": statement.excluded.visibility_m,
+            },
+        )
+        await session.execute(statement)
+        observation_batch = []
+
     for weather_file in sorted(weather_files):
         weather_key = _station_key_and_year(weather_file)
         rain_file = rain_by_key.get(weather_key) if weather_key is not None else None
@@ -1179,8 +1222,7 @@ async def import_midas(
                 }
             )
             if len(observation_batch) >= CHUNK_SIZE:
-                await session.execute(insert(WeatherObservation), observation_batch)
-                observation_batch = []
+                await flush_observation_batch()
 
     for key, rain_file in sorted(rain_by_key.items()):
         if key in used_rain_keys:
@@ -1201,11 +1243,10 @@ async def import_midas(
                 }
             )
             if len(observation_batch) >= CHUNK_SIZE:
-                await session.execute(insert(WeatherObservation), observation_batch)
-                observation_batch = []
+                await flush_observation_batch()
 
     if observation_batch:
-        await session.execute(insert(WeatherObservation), observation_batch)
+        await flush_observation_batch()
 
 
 def validate_midas_tree(root: Path, label: str) -> list[str]:
@@ -1288,6 +1329,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--midas-rain-root", type=Path, default=defaults.midas_rain_root)
     parser.add_argument("--year-from", type=int, default=settings.import_year_from)
     parser.add_argument("--year-to", type=int, default=settings.import_year_to)
+    parser.add_argument(
+        "--lad-reconciliation",
+        choices=["strict", "warn"],
+        default="strict",
+        help=(
+            "How to handle STATS19 local authority codes missing from the LAD lookup: "
+            "strict=fail-fast, warn=continue with fallback names."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1326,6 +1376,7 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
                 lad_path=lad_lookup,
                 year_from=args.year_from,
                 year_to=args.year_to,
+                strict_lad_reconciliation=args.lad_reconciliation == "strict",
             )
             await session.commit()
 
@@ -1364,6 +1415,7 @@ async def _run_pipeline(args: argparse.Namespace) -> None:
                 lad_path=lad_lookup,
                 year_from=args.year_from,
                 year_to=args.year_to,
+                strict_lad_reconciliation=args.lad_reconciliation == "strict",
             )
             await session.commit()
 

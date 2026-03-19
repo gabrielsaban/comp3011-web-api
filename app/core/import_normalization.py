@@ -148,5 +148,5 @@ def is_usable_q_flag(raw: str | None) -> bool:
     value = raw.strip()
     if value in {"", "NA"}:
         return False
-    # MIDAS open files commonly use 9 for missing/unavailable.
-    return value != "9"
+    # MIDAS quality flags: retain only quality-approved values (0).
+    return value == "0"
