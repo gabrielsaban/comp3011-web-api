@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import REAL, Date, DateTime, ForeignKey, Index, Integer, Text
+from sqlalchemy import REAL, Date, DateTime, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,7 +25,13 @@ class WeatherStation(Base):
 
 class WeatherObservation(Base):
     __tablename__ = "weather_observation"
-    __table_args__ = (Index("idx_obs_station_time", "station_id", "observed_at"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "station_id",
+            "observed_at",
+            name="uq_weather_observation_station_time",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     station_id: Mapped[int] = mapped_column(ForeignKey("weather_station.id"), nullable=False)

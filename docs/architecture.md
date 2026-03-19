@@ -188,10 +188,9 @@ CREATE TABLE weather_observation (
     temperature_c     REAL,
     precipitation_mm  REAL,                      -- hourly accumulation mm
     wind_speed_ms     REAL,                      -- mean wind speed m/s
-    visibility_m      INTEGER
+    visibility_m      INTEGER,
+    UNIQUE (station_id, observed_at)
 );
-
-CREATE INDEX idx_obs_station_time ON weather_observation(station_id, observed_at);
 ```
 
 `station_distance_km` exposed by `GET /accidents/:id` is computed at read time from accident and station coordinates; it is not persisted as a column.
@@ -258,16 +257,22 @@ Before loading, the teardown step runs in FK-safe order:
 1. `UPDATE accident SET weather_observation_id = NULL, cluster_id = NULL`
 2. `TRUNCATE vehicle, casualty, accident CASCADE`
 3. `TRUNCATE weather_observation, weather_station CASCADE`
-4. `TRUNCATE cluster CASCADE`
+4. `DELETE FROM cluster` (after nulling `accident.cluster_id`)
+5. `TRUNCATE local_authority, region CASCADE`
+6. `TRUNCATE lookup tables (severity/conditions/type dimensions) CASCADE`
 
-Then for each year, read `accidents_YYYY.csv`, `vehicles_YYYY.csv`, `casualties_YYYY.csv`:
+Then read the DfT full-history CSVs for collisions, vehicles, and casualties, filtering
+rows by `collision_year` to the configured import window (`--year-from`/`--year-to`):
 
-1. Upsert lookup values (severity codes, condition codes, etc.) into lookup tables using `INSERT ... ON CONFLICT DO NOTHING`. Lookups are stable reference data and are not truncated.
-2. Resolve or insert `region` and `local_authority` rows; set `local_authority_id`.
+1. Load lookup values (severity codes, condition codes, etc.) from scanned source codes.
+2. Build `region` and `local_authority` from the LAD lookup and STATS19 LA code usage.
+   If LAD codes are unmatched:
+   - `--lad-reconciliation strict` (default): fail fast with a reconciliation report.
+   - `--lad-reconciliation warn`: continue with fallback STATS19 LA names and `Unknown` region.
 3. Bulk-insert accident rows. Set `number_of_vehicles` and `number_of_casualties` directly
    from the corresponding CSV columns; do not rely on the column `DEFAULT 0` or derive these
    values from child-row counts — the CSV values are authoritative.
-4. Insert vehicle rows with auto-assigned `vehicle_ref` (sequential per accident).
+4. Insert vehicle rows using STATS19 `vehicle_reference` values.
 5. Insert casualty rows; compute `age_band` from `age` during insert using STATS19 standard bands:
 
 ```python
@@ -285,15 +290,14 @@ def age_band(age: int | None) -> str | None:
 
 For each accident with a non-null latitude and longitude:
 
-1. Load all `weather_station` rows into a numpy array of `[lat, lng]` on script startup.
-2. Compute Haversine distances from the accident to all stations (vectorised in NumPy).
-3. Filter to stations within 30km and active on the accident's date.
-4. Select the nearest remaining station.
-5. Query `weather_observation` for that station where `|observed_at - accident_datetime| <= 1 hour`.
-6. Pick the observation with the smallest time delta.
-7. If found, set `accident.weather_observation_id` to the selected observation row (no duplicate weather observation rows are inserted during enrichment).
-
-This runs in a single pass over sorted accidents, batching DB writes with `executemany`.
+1. Parse MIDAS `*_capability.csv` files into `weather_station`.
+2. Parse weather/rain `*_qcv-1_YYYY.csv` files and keep only values with QC flag `0`.
+3. Upsert `weather_observation` on deterministic key `(station_id, observed_at)`.
+4. Use a SQL lateral nearest-station query with deterministic tie-breaks:
+   - nearest by Haversine distance
+   - `weather_station.id ASC` secondary ordering for exact distance ties
+5. For each candidate accident/station pair, choose nearest observation timestamp within ±1 hour.
+6. Batch-update `accident.weather_observation_id`.
 
 ### 4.3 DBSCAN Cluster Computation
 
@@ -311,6 +315,9 @@ db = DBSCAN(
     metric='haversine'
 ).fit(coords)
 ```
+
+Accident rows are ordered by `accident.id` before clustering so DBSCAN input order is stable
+across reruns on identical datasets.
 
 For each unique label ≥ 0 (noise points have label −1):
 
@@ -536,8 +543,9 @@ CREATE INDEX idx_accident_obs        ON accident(weather_observation_id);
 CREATE INDEX idx_vehicle_accident    ON vehicle(accident_id);
 CREATE INDEX idx_casualty_accident   ON casualty(accident_id);
 
--- Weather observation time-series lookup
-CREATE INDEX idx_obs_station_time    ON weather_observation(station_id, observed_at);
+-- Weather observation deterministic key + time-series lookup
+CREATE UNIQUE INDEX uq_weather_observation_station_time
+    ON weather_observation(station_id, observed_at);
 
 -- Cluster centroid lookup for proximity queries
 CREATE INDEX idx_cluster_centroid    ON cluster(centroid_lat, centroid_lng);

@@ -39,7 +39,13 @@ def parse_badc_metadata(path: Path) -> dict[str, list[str]]:
             if key == "data":
                 break
             if len(row) >= 3:
-                metadata[key].append(row[2].strip())
+                values = [token.strip() for token in row[2:] if token.strip()]
+                if not values:
+                    continue
+                if key in {"location", "date_valid"} and len(values) >= 2:
+                    metadata[key].append(",".join(values[:2]))
+                else:
+                    metadata[key].append(values[0])
     return dict(metadata)
 
 
