@@ -112,6 +112,8 @@ async def test_severity_by_conditions_weather_and_midas_dimension(
         ("/api/v1/analytics/severity-by-conditions", {"dimension": "bad"}, "dimension"),
         ("/api/v1/analytics/severity-by-speed-limit", {"urban_or_rural": "Town"}, "urban_or_rural"),
         ("/api/v1/analytics/vulnerable-road-users", {"casualty_type": "Driver"}, "casualty_type"),
+        ("/api/v1/analytics/weather-correlation", {"metric": "rainfall"}, "metric"),
+        ("/api/v1/analytics/hotspots", {"lat": "999", "lng": "-1.5"}, "lat"),
     ],
 )
 async def test_analytics_query_validation_returns_422(
@@ -353,3 +355,83 @@ async def test_vulnerable_road_users_filters_with_pedestrian_and_cyclist_data(
     )
     assert pedestrians_only.status_code == 200
     assert pedestrians_only.json()["data"] == [rows[(60, "Rural")]]
+
+
+async def test_hotspots_returns_cell_counts_and_respects_severity_filter(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+
+    response = await client.get(
+        "/api/v1/analytics/hotspots",
+        params={"lat": 53.8008, "lng": -1.5491, "radius_km": 0.1},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["query"] == {
+        "lat": 53.8008,
+        "lng": -1.5491,
+        "radius_km": 0.1,
+        "severity": None,
+        "date_from": None,
+        "date_to": None,
+    }
+    assert body["data"] == [
+        {
+            "cell_lat": 53.805,
+            "cell_lng": -1.545,
+            "accident_count": 1,
+            "fatal_count": 0,
+            "serious_count": 1,
+        }
+    ]
+
+    fatal_only = await client.get(
+        "/api/v1/analytics/hotspots",
+        params={"lat": 53.8008, "lng": -1.5491, "radius_km": 0.1, "severity": 1},
+    )
+    assert fatal_only.status_code == 200
+    assert fatal_only.json()["data"] == []
+
+
+async def test_weather_correlation_precipitation_returns_expected_bands(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+
+    response = await client.get(
+        "/api/v1/analytics/weather-correlation",
+        params={"metric": "precipitation"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["query"] == {
+        "metric": "precipitation",
+        "date_from": None,
+        "date_to": None,
+        "region_id": None,
+    }
+
+    rows = {row["band"]: row for row in body["data"]}
+    assert rows["Dry"] == {
+        "band": "Dry",
+        "band_range": "<0.2mm",
+        "total_accidents": 2,
+        "fatal": 1,
+        "serious": 0,
+        "slight": 1,
+        "fatal_rate_pct": 50.0,
+        "coverage_pct": 66.67,
+    }
+    assert rows["Light"] == {
+        "band": "Light",
+        "band_range": "0.2-2mm",
+        "total_accidents": 1,
+        "fatal": 0,
+        "serious": 1,
+        "slight": 0,
+        "fatal_rate_pct": 0.0,
+        "coverage_pct": 33.33,
+    }
