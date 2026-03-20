@@ -1,0 +1,49 @@
+{
+  "generated_at_utc": "2026-03-20T19:07:57.236685+00:00",
+  "protocol": {
+    "dataset": "Local full import (2019-2023)",
+    "database": "Local Docker PostgreSQL",
+    "concurrency": 1,
+    "client": "httpx.AsyncClient + ASGITransport (in-process HTTP)",
+    "samples": 30,
+    "warmup": 5
+  },
+  "results": [
+    {
+      "name": "hotspots",
+      "samples": 30,
+      "warmup": 5,
+      "p50_ms": 7.26,
+      "p95_ms": 9.47,
+      "mean_ms": 7.49,
+      "min_ms": 5.48,
+      "max_ms": 9.77,
+      "target_ms": 800.0,
+      "pass_target": true
+    },
+    {
+      "name": "accidents_region",
+      "samples": 30,
+      "warmup": 5,
+      "p50_ms": 22.2,
+      "p95_ms": 24.47,
+      "mean_ms": 22.3,
+      "min_ms": 19.45,
+      "max_ms": 25.39,
+      "target_ms": 400.0,
+      "pass_target": true
+    },
+    {
+      "name": "route_risk_10km",
+      "samples": 30,
+      "warmup": 5,
+      "p50_ms": 182.17,
+      "p95_ms": 218.34,
+      "mean_ms": 186.0,
+      "min_ms": 167.51,
+      "max_ms": 240.44,
+      "target_ms": 2000.0,
+      "pass_target": true
+    }
+  ]
+}
