@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import UTC, datetime
+from math import pi
 
 import pytest
 from httpx import AsyncClient
@@ -182,3 +183,86 @@ async def test_route_risk_defaults_day_and_time_when_options_omitted(
     query = response.json()["query"]
     assert query["time_of_day"] == "17:45"
     assert query["day_of_week"] == 2  # Monday -> 2 in API convention (1=Sunday)
+
+
+def test_accident_density_factor_uses_cached_p99_normalization() -> None:
+    cache.P99_DENSITY = 2.0
+    nearby_count = 1
+    buffer_radius_km = 0.5
+
+    expected_density = nearby_count / (pi * (buffer_radius_km**2))
+    expected_factor = expected_density / cache.P99_DENSITY
+
+    assert route_risk_service._accident_density_factor(
+        nearby_count, buffer_radius_km
+    ) == pytest.approx(expected_factor, abs=1e-6)
+    assert route_risk_service._accident_density_factor(99, buffer_radius_km) == 1.0
+
+
+def test_severity_factor_applies_weighted_formula() -> None:
+    nearby = [
+        route_risk_service._NearbyAccident(severity_id=1, speed_limit=40),
+        route_risk_service._NearbyAccident(severity_id=2, speed_limit=40),
+        route_risk_service._NearbyAccident(severity_id=3, speed_limit=40),
+    ]
+
+    # (3*fatal + 2*serious + 1*slight) / (3 * total) = (3+2+1) / 9
+    assert route_risk_service._severity_factor(nearby) == pytest.approx(6 / 9, abs=1e-6)
+
+
+async def test_route_risk_response_contract_keys(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    _set_deterministic_caches()
+
+    response = await client.post(
+        "/api/v1/analytics/route-risk",
+        json={"waypoints": [[53.7905, -1.5415], [53.7913, -1.5405]]},
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    assert set(body.keys()) == {"data", "query"}
+
+    assert set(body["data"].keys()) == {"route_summary", "segments"}
+    assert set(body["query"].keys()) == {
+        "waypoint_count",
+        "segment_length_km",
+        "buffer_radius_km",
+        "time_of_day",
+        "day_of_week",
+    }
+
+    summary = body["data"]["route_summary"]
+    assert set(summary.keys()) == {
+        "total_distance_km",
+        "segment_count",
+        "aggregate_risk_score",
+        "risk_label",
+        "peak_segment_risk",
+        "peak_segment_id",
+        "clusters_intersected",
+    }
+
+    segment = body["data"]["segments"][0]
+    assert set(segment.keys()) == {
+        "segment_id",
+        "start",
+        "end",
+        "length_km",
+        "risk_score",
+        "risk_label",
+        "factors",
+        "nearby_accidents",
+        "nearby_cluster_ids",
+        "dominant_speed_limit",
+    }
+    assert set(segment["factors"].keys()) == {
+        "accident_density",
+        "severity_score",
+        "time_risk",
+        "speed_limit_risk",
+        "cluster_proximity",
+    }

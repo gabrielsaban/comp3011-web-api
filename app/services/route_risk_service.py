@@ -8,9 +8,10 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import HEATMAP, P99_DENSITY, SPEED_FATAL_RATES
+from app.core import cache
 from app.core.route_risk_constants import (
     ACCIDENT_DENSITY_WEIGHT,
+    CLUSTER_PROXIMITY_DECAY_KM,
     CLUSTER_PROXIMITY_WEIGHT,
     FACTOR_DESCRIPTIONS,
     RISK_LABEL_RANGES,
@@ -214,12 +215,12 @@ async def _fetch_nearby_accidents(
 
 
 def _accident_density_factor(nearby_count: int, buffer_radius_km: float) -> float:
-    if nearby_count == 0 or P99_DENSITY <= 0:
+    if nearby_count == 0 or cache.P99_DENSITY <= 0:
         return 0.0
 
     area_km2 = pi * (buffer_radius_km**2)
     density = nearby_count / area_km2
-    return _clip01(density / P99_DENSITY)
+    return _clip01(density / cache.P99_DENSITY)
 
 
 def _severity_factor(nearby: list[_NearbyAccident]) -> float:
@@ -234,14 +235,17 @@ def _severity_factor(nearby: list[_NearbyAccident]) -> float:
 
 
 def _time_factor(day_of_week: int, hour: int) -> float:
-    if not HEATMAP:
+    if not cache.HEATMAP:
         return 0.0
 
-    max_cell = max((count for by_hour in HEATMAP.values() for count in by_hour.values()), default=0)
+    max_cell = max(
+        (count for by_hour in cache.HEATMAP.values() for count in by_hour.values()),
+        default=0,
+    )
     if max_cell <= 0:
         return 0.0
 
-    cell = HEATMAP.get(day_of_week, {}).get(hour, 0)
+    cell = cache.HEATMAP.get(day_of_week, {}).get(hour, 0)
     return _clip01(cell / max_cell)
 
 
@@ -260,14 +264,14 @@ def _dominant_speed_limit(nearby: list[_NearbyAccident]) -> int | None:
 
 
 def _speed_limit_factor(dominant_speed_limit: int | None) -> float:
-    if dominant_speed_limit is None or not SPEED_FATAL_RATES:
+    if dominant_speed_limit is None or not cache.SPEED_FATAL_RATES:
         return 0.0
 
-    max_rate = max(SPEED_FATAL_RATES.values(), default=0.0)
+    max_rate = max(cache.SPEED_FATAL_RATES.values(), default=0.0)
     if max_rate <= 0:
         return 0.0
 
-    rate = SPEED_FATAL_RATES.get(dominant_speed_limit, 0.0)
+    rate = cache.SPEED_FATAL_RATES.get(dominant_speed_limit, 0.0)
     return _clip01(rate / max_rate)
 
 
@@ -309,7 +313,7 @@ def _cluster_factor(
     if nearest_edge_distance_km is None:
         return nearby_cluster_ids, 0.0
 
-    proximity = _clip01(1.0 - (nearest_edge_distance_km / 2.0))
+    proximity = _clip01(1.0 - (nearest_edge_distance_km / CLUSTER_PROXIMITY_DECAY_KM))
     return nearby_cluster_ids, proximity
 
 

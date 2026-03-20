@@ -7,6 +7,7 @@ MAX_SEGMENT_LENGTH_KM = 2.0
 DEFAULT_BUFFER_RADIUS_KM = 0.5
 MIN_BUFFER_RADIUS_KM = 0.1
 MAX_BUFFER_RADIUS_KM = 5.0
+CLUSTER_PROXIMITY_DECAY_KM = 2.0
 
 ACCIDENT_DENSITY_WEIGHT = 0.35
 SEVERITY_WEIGHT = 0.30
@@ -41,8 +42,8 @@ FACTOR_DESCRIPTIONS: dict[str, str] = {
         "against the maximum cached speed fatal rate."
     ),
     "cluster_proximity": (
-        "1.0 inside any cluster radius; otherwise decays linearly to 0.0 by 2km "
-        "beyond the nearest cluster edge."
+        "1.0 inside any cluster radius; otherwise decays linearly to 0.0 by "
+        f"{CLUSTER_PROXIMITY_DECAY_KM}km beyond the nearest cluster edge."
     ),
 }
 
