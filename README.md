@@ -30,6 +30,31 @@ uv sync --all-groups
 uv run alembic upgrade head
 ```
 
+## Data Import (Phase 7+)
+
+Validate source directories before loading:
+
+```bash
+uv run python scripts/import.py \
+  --mode validate \
+  --stats19-root /home/g/datasets/comp3011/stats19 \
+  --lad-lookup "/home/g/datasets/comp3011/lad/Local_Authority_District_(April_2023)_to_(January_2021)Lookup.csv" \
+  --midas-weather-root /home/g/datasets/comp3011/midas/hourly-weather \
+  --midas-rain-root /home/g/datasets/comp3011/midas/hourly-rain
+```
+
+Run a full refresh import for the project window:
+
+```bash
+uv run python scripts/import.py \
+  --mode run \
+  --year-from 2019 --year-to 2023 \
+  --stats19-root /home/g/datasets/comp3011/stats19 \
+  --lad-lookup "/home/g/datasets/comp3011/lad/Local_Authority_District_(April_2023)_to_(January_2021)Lookup.csv" \
+  --midas-weather-root /home/g/datasets/comp3011/midas/hourly-weather \
+  --midas-rain-root /home/g/datasets/comp3011/midas/hourly-rain
+```
+
 ## Running the API
 
 ```bash
@@ -54,6 +79,36 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy app
 ```
+
+## Phase 9 Performance Benchmark
+
+Run benchmark checks against your full local import:
+
+```bash
+uv run python scripts/benchmark_phase9.py \
+  --samples 30 \
+  --warmup 5 \
+  --output-json docs/phase9-benchmark-results.json
+```
+
+Targets:
+
+- `GET /api/v1/analytics/hotspots`: p95 < 800ms
+- `GET /api/v1/accidents?region_id=<id>`: p95 < 400ms
+- `POST /api/v1/analytics/route-risk` (about 10km route): p95 < 2.0s
+
+See [docs/performance-benchmark.md](docs/performance-benchmark.md) for benchmark protocol details.
+
+## OpenAPI Export and Reconciliation
+
+Export the generated OpenAPI snapshot for submission artifacts:
+
+```bash
+uv run python scripts/export_openapi.py --output docs/openapi.snapshot.json
+```
+
+Reconciliation process and checklist are documented in
+[docs/openapi-process.md](docs/openapi-process.md).
 
 ## Minting JWTs for Local Testing
 
