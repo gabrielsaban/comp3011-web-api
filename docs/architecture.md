@@ -291,7 +291,10 @@ def age_band(age: int | None) -> str | None:
 For each accident with a non-null latitude and longitude:
 
 1. Parse MIDAS `*_capability.csv` files into `weather_station`.
-2. Parse weather/rain `*_qcv-1_YYYY.csv` files and keep only values with QC flag `0`.
+2. Parse weather/rain `*_qcv-1_YYYY.csv` files and keep only non-missing quality values.
+   MIDAS q-flags are often composite integers (for example `10001`, `2006`), so
+   parsing treats blank/`NA` as missing and rejects values whose terminal digit
+   is `9`.
 3. Upsert `weather_observation` on deterministic key `(station_id, observed_at)`.
 4. Use a SQL lateral nearest-station query with deterministic tie-breaks:
    - nearest by Haversine distance

@@ -245,7 +245,9 @@ Import implementation rules:
     - Station metadata comes from `*_capability.csv` (`src_id`, station name, lat/lon, height, active window).
     - Observation records come from `*_qcv-1_YYYY.csv` within the target years; `qcv-0` files are ignored.
     - Convert `NA` strings to `NULL` before type coercion.
-    - Keep only quality-approved values for imported metrics (reject rows/fields where relevant `*_q` flags are non-zero).
+    - Keep only non-missing quality values for imported metrics:
+      - reject blank/`NA` quality flags
+      - reject quality flags whose terminal digit is `9` (missing/unavailable in MIDAS composite q-codes)
     - Normalise metric units into API schema units (for example, visibility decametres -> metres) during parse, not at query time.
     - Upsert observations on deterministic key `(station_id, observed_at)` to keep re-runs idempotent.
 

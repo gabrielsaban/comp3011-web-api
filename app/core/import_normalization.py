@@ -148,5 +148,12 @@ def is_usable_q_flag(raw: str | None) -> bool:
     value = raw.strip()
     if value in {"", "NA"}:
         return False
-    # MIDAS quality flags: retain only quality-approved values (0).
-    return value == "0"
+    try:
+        parsed = int(value)
+    except ValueError:
+        return False
+
+    # MIDAS Open q-flags are often composite integers (e.g. 10001, 2006).
+    # The final digit carries missing/unavailable status; values ending in 9
+    # should be treated as unusable.
+    return parsed % 10 != 9

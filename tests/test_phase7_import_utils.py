@@ -78,8 +78,10 @@ def test_region_and_weather_value_normalisation() -> None:
     assert normalize_wind_speed_ms("NA", "1") is None
 
     assert is_usable_q_flag("0") is True
-    assert is_usable_q_flag("6") is False
+    assert is_usable_q_flag("6") is True
     assert is_usable_q_flag("9") is False
+    assert is_usable_q_flag("10001") is True
+    assert is_usable_q_flag("10009") is False
     assert is_usable_q_flag("NA") is False
 
     assert parse_iso_datetime("2023-01-01 09:00:00") is not None
