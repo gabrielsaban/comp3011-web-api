@@ -19,6 +19,7 @@ from app.routers import (
     local_authorities,
     reference,
     regions,
+    route_risk,
     vehicles,
     weather_stations,
 )
@@ -57,6 +58,7 @@ app.include_router(local_authorities.router)
 app.include_router(weather_stations.router)
 app.include_router(clusters.router)
 app.include_router(analytics.router)
+app.include_router(route_risk.router)
 
 
 @app.exception_handler(RequestValidationError)
