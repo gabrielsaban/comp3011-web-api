@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
 from app.core.route_risk_constants import ROUTE_RISK_WEIGHTS
+from app.services import route_risk_service
 from tests.fixtures import seed_profile
 
 
@@ -55,6 +57,29 @@ async def test_route_risk_rejects_zero_length_route(client: AsyncClient) -> None
     assert response.status_code == 400
     error = response.json()["error"]
     assert error["code"] == "BAD_REQUEST"
+
+
+@pytest.mark.parametrize(
+    ("options", "invalid_field"),
+    [
+        ({"segment_length_km": 0.05, "buffer_radius_km": 0.5}, "segment_length_km"),
+        ({"segment_length_km": 2.5, "buffer_radius_km": 0.5}, "segment_length_km"),
+        ({"segment_length_km": 0.5, "buffer_radius_km": 0.05}, "buffer_radius_km"),
+    ],
+)
+async def test_route_risk_rejects_invalid_option_ranges(
+    client: AsyncClient,
+    options: dict[str, float],
+    invalid_field: str,
+) -> None:
+    response = await client.post(
+        "/api/v1/analytics/route-risk",
+        json={"waypoints": [[53.8, -1.5], [53.81, -1.49]], "options": options},
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert any(detail["loc"][-1] == invalid_field for detail in body["error"]["details"])
 
 
 async def test_route_risk_scores_segment_with_cache_driven_f3_f4_and_cluster_f5(
@@ -131,3 +156,29 @@ async def test_route_risk_cluster_proximity_decays_to_zero_when_far_away(
     assert segment["factors"]["cluster_proximity"] == 0.0
     assert segment["nearby_accidents"] == 0
     assert segment["dominant_speed_limit"] is None
+
+
+async def test_route_risk_defaults_day_and_time_when_options_omitted(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await seed_profile(db_session, "analytics_route_risk")
+    _set_deterministic_caches()
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz: object | None = None) -> FixedDateTime:
+            return cls(2024, 3, 4, 17, 45, tzinfo=UTC)  # Monday
+
+    monkeypatch.setattr(route_risk_service, "datetime", FixedDateTime)
+
+    response = await client.post(
+        "/api/v1/analytics/route-risk",
+        json={"waypoints": [[53.8008, -1.5491], [53.8108, -1.5391]]},
+    )
+    assert response.status_code == 200
+
+    query = response.json()["query"]
+    assert query["time_of_day"] == "17:45"
+    assert query["day_of_week"] == 2  # Monday -> 2 in API convention (1=Sunday)
