@@ -25,6 +25,7 @@ from app.schemas.analytics import (
     CasualtiesByDemographicResponse,
     DriverAgeSeverityResponse,
     FatalConditionCombinationsResponse,
+    HotspotsResponse,
     MultiVehicleSeverityResponse,
     PoliceAttendanceProfileResponse,
     SeasonalPatternResponse,
@@ -32,6 +33,7 @@ from app.schemas.analytics import (
     SeverityByJourneyPurposeResponse,
     SeverityBySpeedLimitResponse,
     VulnerableRoadUsersResponse,
+    WeatherCorrelationResponse,
 )
 from app.schemas.cluster import (
     AnnualTrendPoint,
@@ -99,6 +101,7 @@ __all__ = [
     "CasualtiesByDemographicResponse",
     "DriverAgeSeverityResponse",
     "FatalConditionCombinationsResponse",
+    "HotspotsResponse",
     "MultiVehicleSeverityResponse",
     "PoliceAttendanceProfileResponse",
     "SeasonalPatternResponse",
@@ -106,6 +109,7 @@ __all__ = [
     "SeverityByJourneyPurposeResponse",
     "SeverityBySpeedLimitResponse",
     "VulnerableRoadUsersResponse",
+    "WeatherCorrelationResponse",
     "AnnualTrendPoint",
     "ClusterAccidentCollectionResponse",
     "ClusterAccidentContext",

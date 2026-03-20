@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from calendar import month_name
 from datetime import date
+from math import asin, cos, floor, radians, sin, sqrt
 from typing import Any
 
 from fastapi import HTTPException
@@ -44,6 +45,9 @@ from app.schemas.analytics import (
     FatalConditionCombinationRow,
     FatalConditionCombinationsQuery,
     FatalConditionCombinationsResponse,
+    HotspotCellRow,
+    HotspotsQuery,
+    HotspotsResponse,
     LocalAuthorityAnalyticsRef,
     MultiVehicleSeverityQuery,
     MultiVehicleSeverityResponse,
@@ -66,6 +70,9 @@ from app.schemas.analytics import (
     VulnerableRoadUsersQuery,
     VulnerableRoadUsersResponse,
     VulnerableRoadUsersRow,
+    WeatherCorrelationQuery,
+    WeatherCorrelationResponse,
+    WeatherCorrelationRow,
 )
 
 DAY_LABELS = {
@@ -89,6 +96,16 @@ ALLOWED_CONDITION_DIMENSIONS = {
     "visibility_band",
     "temperature_band",
 }
+
+ALLOWED_WEATHER_CORRELATION_METRICS = {
+    "precipitation",
+    "visibility",
+    "temperature",
+    "wind_speed",
+}
+
+HOTSPOT_GRID_DEGREES = 0.01
+HOTSPOT_GRID_CENTER_OFFSET = HOTSPOT_GRID_DEGREES / 2
 
 
 def _round_pct(numerator: int | float, denominator: int | float) -> float:
@@ -202,6 +219,106 @@ def _midas_band_expr(dimension: str) -> Any:
             else_="Warm (>15C)",
         )
     raise ValueError(f"Unsupported MIDAS dimension: {dimension}")
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    earth_radius_km = 6371.0
+    d_lat = radians(lat2 - lat1)
+    d_lng = radians(lon2 - lon1)
+    a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lng / 2) ** 2
+    return earth_radius_km * 2 * asin(sqrt(a))
+
+
+def _weather_correlation_band_expr(metric: str) -> tuple[Any, Any, Any, Any]:
+    if metric == "precipitation":
+        value_expr = WeatherObservation.precipitation_mm
+        band_expr = case(
+            (value_expr < 0.2, "Dry"),
+            (and_(value_expr >= 0.2, value_expr <= 2.0), "Light"),
+            (and_(value_expr > 2.0, value_expr <= 10.0), "Moderate"),
+            else_="Heavy",
+        )
+        range_expr = case(
+            (value_expr < 0.2, "<0.2mm"),
+            (and_(value_expr >= 0.2, value_expr <= 2.0), "0.2-2mm"),
+            (and_(value_expr > 2.0, value_expr <= 10.0), "2-10mm"),
+            else_=">10mm",
+        )
+        order_expr = case(
+            (value_expr < 0.2, 1),
+            (and_(value_expr >= 0.2, value_expr <= 2.0), 2),
+            (and_(value_expr > 2.0, value_expr <= 10.0), 3),
+            else_=4,
+        )
+        return band_expr, range_expr, order_expr, value_expr
+
+    if metric == "visibility":
+        value_expr = WeatherObservation.visibility_m
+        band_expr = case(
+            (value_expr < 100, "Dense Fog"),
+            (and_(value_expr >= 100, value_expr <= 1000), "Fog"),
+            (and_(value_expr > 1000, value_expr <= 5000), "Mist"),
+            else_="Clear",
+        )
+        range_expr = case(
+            (value_expr < 100, "<100m"),
+            (and_(value_expr >= 100, value_expr <= 1000), "100-1000m"),
+            (and_(value_expr > 1000, value_expr <= 5000), "1000-5000m"),
+            else_=">5000m",
+        )
+        order_expr = case(
+            (value_expr < 100, 1),
+            (and_(value_expr >= 100, value_expr <= 1000), 2),
+            (and_(value_expr > 1000, value_expr <= 5000), 3),
+            else_=4,
+        )
+        return band_expr, range_expr, order_expr, value_expr
+
+    if metric == "temperature":
+        value_expr = WeatherObservation.temperature_c
+        band_expr = case(
+            (value_expr <= 0, "Freezing"),
+            (and_(value_expr > 0, value_expr <= 7), "Cold"),
+            (and_(value_expr > 7, value_expr <= 15), "Mild"),
+            else_="Warm",
+        )
+        range_expr = case(
+            (value_expr <= 0, "<=0C"),
+            (and_(value_expr > 0, value_expr <= 7), "0-7C"),
+            (and_(value_expr > 7, value_expr <= 15), "7-15C"),
+            else_=">15C",
+        )
+        order_expr = case(
+            (value_expr <= 0, 1),
+            (and_(value_expr > 0, value_expr <= 7), 2),
+            (and_(value_expr > 7, value_expr <= 15), 3),
+            else_=4,
+        )
+        return band_expr, range_expr, order_expr, value_expr
+
+    if metric == "wind_speed":
+        value_expr = WeatherObservation.wind_speed_ms
+        band_expr = case(
+            (value_expr < 2, "Calm"),
+            (and_(value_expr >= 2, value_expr <= 5), "Light"),
+            (and_(value_expr > 5, value_expr <= 10), "Moderate"),
+            else_="Strong",
+        )
+        range_expr = case(
+            (value_expr < 2, "<2m/s"),
+            (and_(value_expr >= 2, value_expr <= 5), "2-5m/s"),
+            (and_(value_expr > 5, value_expr <= 10), "5-10m/s"),
+            else_=">10m/s",
+        )
+        order_expr = case(
+            (value_expr < 2, 1),
+            (and_(value_expr >= 2, value_expr <= 5), 2),
+            (and_(value_expr > 5, value_expr <= 10), 3),
+            else_=4,
+        )
+        return band_expr, range_expr, order_expr, value_expr
+
+    raise ValueError(f"Unsupported weather-correlation metric: {metric}")
 
 
 async def get_accidents_by_time(
@@ -1009,6 +1126,156 @@ async def get_police_attendance_profile(
     return PoliceAttendanceProfileResponse(
         data=data,
         query=PoliceAttendanceProfileQuery(
+            date_from=date_from,
+            date_to=date_to,
+            region_id=region_id,
+        ),
+    )
+
+
+async def get_hotspots(
+    session: AsyncSession,
+    *,
+    lat: float,
+    lng: float,
+    radius_km: float,
+    severity: int | None,
+    date_from: date | None,
+    date_to: date | None,
+) -> HotspotsResponse:
+    delta = radius_km / 111.0
+    query = select(Accident.latitude, Accident.longitude, Accident.severity_id).where(
+        Accident.latitude.is_not(None),
+        Accident.longitude.is_not(None),
+        Accident.latitude.between(lat - delta, lat + delta),
+        Accident.longitude.between(lng - delta, lng + delta),
+    )
+    query = _apply_date_region_filters(query, date_from=date_from, date_to=date_to)
+    if severity is not None:
+        query = query.where(Accident.severity_id == severity)
+    rows = (await session.execute(query)).all()
+
+    counts: dict[tuple[int, int], dict[str, int]] = {}
+    for row in rows:
+        row_lat = float(row.latitude)
+        row_lng = float(row.longitude)
+        if _haversine_km(lat, lng, row_lat, row_lng) > radius_km:
+            continue
+
+        lat_bin = floor(row_lat / HOTSPOT_GRID_DEGREES)
+        lng_bin = floor(row_lng / HOTSPOT_GRID_DEGREES)
+        key = (lat_bin, lng_bin)
+        bucket = counts.setdefault(
+            key,
+            {"accident_count": 0, "fatal_count": 0, "serious_count": 0},
+        )
+        bucket["accident_count"] += 1
+        if int(row.severity_id) == 1:
+            bucket["fatal_count"] += 1
+        if int(row.severity_id) == 2:
+            bucket["serious_count"] += 1
+
+    data = [
+        HotspotCellRow(
+            cell_lat=round((lat_bin * HOTSPOT_GRID_DEGREES) + HOTSPOT_GRID_CENTER_OFFSET, 3),
+            cell_lng=round((lng_bin * HOTSPOT_GRID_DEGREES) + HOTSPOT_GRID_CENTER_OFFSET, 3),
+            accident_count=bucket["accident_count"],
+            fatal_count=bucket["fatal_count"],
+            serious_count=bucket["serious_count"],
+        )
+        for (lat_bin, lng_bin), bucket in sorted(
+            counts.items(),
+            key=lambda item: (
+                -item[1]["accident_count"],
+                item[0][0],
+                item[0][1],
+            ),
+        )
+    ]
+
+    return HotspotsResponse(
+        data=data,
+        query=HotspotsQuery(
+            lat=lat,
+            lng=lng,
+            radius_km=radius_km,
+            severity=severity,
+            date_from=date_from,
+            date_to=date_to,
+        ),
+    )
+
+
+async def get_weather_correlation(
+    session: AsyncSession,
+    *,
+    metric: str,
+    date_from: date | None,
+    date_to: date | None,
+    region_id: int | None,
+) -> WeatherCorrelationResponse:
+    if metric not in ALLOWED_WEATHER_CORRELATION_METRICS:
+        raise HTTPException(status_code=400, detail="Invalid metric.")
+
+    band_expr, range_expr, order_expr, value_expr = _weather_correlation_band_expr(metric)
+    fatal, serious, slight = _severity_counts()
+
+    total_scope_query = (
+        select(func.count(Accident.id))
+        .select_from(Accident)
+        .join(WeatherObservation, Accident.weather_observation_id == WeatherObservation.id)
+    )
+    total_scope_query = _apply_date_region_filters(
+        total_scope_query,
+        date_from=date_from,
+        date_to=date_to,
+        region_id=region_id,
+    )
+    total_scope = int((await session.scalar(total_scope_query)) or 0)
+
+    query = (
+        select(
+            band_expr.label("band"),
+            range_expr.label("band_range"),
+            order_expr.label("band_order"),
+            func.count(Accident.id).label("total_accidents"),
+            fatal,
+            serious,
+            slight,
+        )
+        .select_from(Accident)
+        .join(WeatherObservation, Accident.weather_observation_id == WeatherObservation.id)
+        .where(value_expr.is_not(None))
+    )
+    query = _apply_date_region_filters(
+        query,
+        date_from=date_from,
+        date_to=date_to,
+        region_id=region_id,
+    )
+    rows = (
+        await session.execute(
+            query.group_by("band", "band_range", "band_order").order_by("band_order")
+        )
+    ).all()
+
+    data = [
+        WeatherCorrelationRow(
+            band=str(row.band),
+            band_range=str(row.band_range),
+            total_accidents=int(row.total_accidents),
+            fatal=int(row.fatal or 0),
+            serious=int(row.serious or 0),
+            slight=int(row.slight or 0),
+            fatal_rate_pct=_round_pct(int(row.fatal or 0), int(row.total_accidents)),
+            coverage_pct=_round_pct(int(row.total_accidents), total_scope),
+        )
+        for row in rows
+    ]
+    return WeatherCorrelationResponse(
+        data=data,
+        query=WeatherCorrelationQuery(
+            metric=metric,
             date_from=date_from,
             date_to=date_to,
             region_id=region_id,
