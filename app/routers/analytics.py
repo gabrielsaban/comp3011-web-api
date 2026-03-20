@@ -13,6 +13,7 @@ from app.schemas.analytics import (
     CasualtiesByDemographicResponse,
     DriverAgeSeverityResponse,
     FatalConditionCombinationsResponse,
+    HotspotsResponse,
     MultiVehicleSeverityResponse,
     PoliceAttendanceProfileResponse,
     SeasonalPatternResponse,
@@ -20,6 +21,7 @@ from app.schemas.analytics import (
     SeverityByJourneyPurposeResponse,
     SeverityBySpeedLimitResponse,
     VulnerableRoadUsersResponse,
+    WeatherCorrelationResponse,
 )
 from app.services.analytics_service import (
     get_accidents_by_local_authority,
@@ -29,6 +31,7 @@ from app.services.analytics_service import (
     get_casualties_by_demographic,
     get_driver_age_severity,
     get_fatal_condition_combinations,
+    get_hotspots,
     get_multi_vehicle_severity,
     get_police_attendance_profile,
     get_seasonal_pattern,
@@ -36,6 +39,7 @@ from app.services.analytics_service import (
     get_severity_by_journey_purpose,
     get_severity_by_speed_limit,
     get_vulnerable_road_users,
+    get_weather_correlation,
 )
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["Analytics"])
@@ -126,6 +130,27 @@ async def accidents_by_vehicle_type(
     )
 
 
+@router.get("/hotspots", response_model=HotspotsResponse)
+async def hotspots(
+    db: DbSession,
+    lat: float = Query(ge=-90, le=90),
+    lng: float = Query(ge=-180, le=180),
+    radius_km: float = Query(default=5.0, gt=0),
+    severity: int | None = Query(default=None, ge=1, le=3),
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> HotspotsResponse:
+    return await get_hotspots(
+        db,
+        lat=lat,
+        lng=lng,
+        radius_km=radius_km,
+        severity=severity,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
 @router.get("/casualties-by-demographic", response_model=CasualtiesByDemographicResponse)
 async def casualties_by_demographic(
     db: DbSession,
@@ -159,6 +184,23 @@ async def fatal_condition_combinations(
         region_id=region_id,
         min_count=min_count,
         limit=limit,
+    )
+
+
+@router.get("/weather-correlation", response_model=WeatherCorrelationResponse)
+async def weather_correlation(
+    db: DbSession,
+    metric: str = Query(pattern="^(precipitation|visibility|temperature|wind_speed)$"),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    region_id: int | None = None,
+) -> WeatherCorrelationResponse:
+    return await get_weather_correlation(
+        db,
+        metric=metric,
+        date_from=date_from,
+        date_to=date_to,
+        region_id=region_id,
     )
 
 

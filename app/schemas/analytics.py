@@ -311,3 +311,48 @@ class MultiVehicleSeverityQuery(BaseModel):
 class MultiVehicleSeverityResponse(BaseModel):
     data: list[MultiVehicleSeverityRow]
     query: MultiVehicleSeverityQuery
+
+
+class HotspotCellRow(BaseModel):
+    cell_lat: float
+    cell_lng: float
+    accident_count: int
+    fatal_count: int
+    serious_count: int
+
+
+class HotspotsQuery(BaseModel):
+    lat: float
+    lng: float
+    radius_km: float
+    severity: int | None
+    date_from: date | None
+    date_to: date | None
+
+
+class HotspotsResponse(BaseModel):
+    data: list[HotspotCellRow]
+    query: HotspotsQuery
+
+
+class WeatherCorrelationRow(BaseModel):
+    band: str
+    band_range: str
+    total_accidents: int
+    fatal: int
+    serious: int
+    slight: int
+    fatal_rate_pct: float
+    coverage_pct: float
+
+
+class WeatherCorrelationQuery(BaseModel):
+    metric: str
+    date_from: date | None
+    date_to: date | None
+    region_id: int | None
+
+
+class WeatherCorrelationResponse(BaseModel):
+    data: list[WeatherCorrelationRow]
+    query: WeatherCorrelationQuery
