@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
@@ -23,6 +24,10 @@ from app.routers import (
     vehicles,
     weather_stations,
 )
+
+
+def _csv_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 @asynccontextmanager
@@ -46,6 +51,16 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+cors_origins = _csv_list(settings.cors_allow_origins)
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=settings.cors_allow_credentials,
+        allow_methods=_csv_list(settings.cors_allow_methods) or ["*"],
+        allow_headers=_csv_list(settings.cors_allow_headers) or ["*"],
+    )
 
 app.include_router(health.router)
 app.include_router(auth_probe.router)

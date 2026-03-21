@@ -19,6 +19,7 @@ cd comp3011-web-api
 # 2. Create your local env file and set a JWT secret
 cp .env.example .env
 # Edit .env and replace JWT_SECRET with any random string
+# Optional: adjust CORS_ALLOW_ORIGINS if your frontend runs on a different origin
 
 # 3. Start PostgreSQL
 docker compose up -d
@@ -62,6 +63,9 @@ uv run uvicorn app.main:app --reload
 ```
 
 OpenAPI docs available at [http://localhost:8000/docs](http://localhost:8000/docs).
+
+Startup caches for route-risk factors are preloaded by default
+(`CACHE_PRELOAD_ON_STARTUP=true` in `.env.example`).
 
 ## Running Tests
 

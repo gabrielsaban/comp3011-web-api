@@ -45,9 +45,11 @@ MIDAS is available via CEDA at https://catalogue.ceda.ac.uk/uuid/220a65615218d5c
 
 ## Project Status
 
-Design phase complete. Implementation pending.
+Implementation complete through Phase 9 hardening.
 
-All endpoints are fully specified in `docs/api-spec.md`. The database schema, import pipeline, and scoring model are documented in `docs/architecture.md`. The next step is building the FastAPI application and import scripts.
+The FastAPI application, PostgreSQL schema/migrations, import pipeline, analytics
+endpoints, and route-risk engine are implemented and tested. Current focus is
+deployment execution and final submission packaging.
 
 ---
 
