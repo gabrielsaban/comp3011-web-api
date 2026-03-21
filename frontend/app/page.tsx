@@ -1,7 +1,7 @@
 import Link from "next/link";
 
-import { API_BASE_URL } from "@/lib/api";
-import { HealthPill } from "@/components/health-pill";
+import { HealthPill } from "../components/health-pill";
+import { API_BASE_URL } from "../lib/api";
 
 const SERVICE_STEPS = [
   {

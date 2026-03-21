@@ -7,14 +7,14 @@ import {
   fetchHotspots,
   fetchRegions,
   fetchWeatherCorrelation,
-} from "@/lib/api";
-import { fmtNumber, fmtPct } from "@/lib/format";
+} from "../../lib/api";
+import { fmtNumber, fmtPct } from "../../lib/format";
 import type {
   AnnualTrendResponse,
   HotspotsResponse,
   RegionSummary,
   WeatherCorrelationResponse,
-} from "@/lib/types";
+} from "../../lib/types";
 
 export default function InsightsPage() {
   const [regions, setRegions] = useState<RegionSummary[]>([]);

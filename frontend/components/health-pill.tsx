@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { ApiRequestError, fetchHealth } from "@/lib/api";
+import { ApiRequestError, fetchHealth } from "../lib/api";
 
 type HealthState =
   | { status: "loading" }

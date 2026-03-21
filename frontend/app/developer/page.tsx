@@ -2,7 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 
-import { API_BASE_URL, callApiPath } from "@/lib/api";
+import { API_BASE_URL, callApiPath } from "../../lib/api";
 
 const PRESET_PATHS = [
   "/health",

@@ -2,9 +2,9 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { fetchRouteRisk, fetchRouteRiskScoringModel } from "@/lib/api";
-import { clamp, fmtNumber, fmtRisk } from "@/lib/format";
-import type { RouteRiskResponse, RouteRiskScoringModelResponse } from "@/lib/types";
+import { fetchRouteRisk, fetchRouteRiskScoringModel } from "../../lib/api";
+import { clamp, fmtNumber, fmtRisk } from "../../lib/format";
+import type { RouteRiskResponse, RouteRiskScoringModelResponse } from "../../lib/types";
 
 const SAMPLE_ROUTE = [
   "51.5074,-0.1278",

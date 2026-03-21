@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { TopNav } from "@/components/top-nav";
+import { TopNav } from "../components/top-nav";
 
 import "./globals.css";
 
