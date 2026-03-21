@@ -16,7 +16,7 @@ import type {
   WeatherCorrelationResponse,
 } from "@/lib/types";
 
-export default function InsightsPage(): JSX.Element {
+export default function InsightsPage() {
   const [regions, setRegions] = useState<RegionSummary[]>([]);
   const [regionId, setRegionId] = useState<string>("");
   const [yearFrom, setYearFrom] = useState(2019);

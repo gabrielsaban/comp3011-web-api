@@ -13,7 +13,7 @@ const PRESET_PATHS = [
   "/api/v1/analytics/hotspots?lat=51.5074&lng=-0.1278&radius_km=10",
 ];
 
-export default function DeveloperPage(): JSX.Element {
+export default function DeveloperPage() {
   const [path, setPath] = useState(PRESET_PATHS[0]);
   const [response, setResponse] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);

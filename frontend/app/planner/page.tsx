@@ -35,7 +35,7 @@ function parseWaypoints(input: string): [number, number][] {
   return parsed;
 }
 
-export default function PlannerPage(): JSX.Element {
+export default function PlannerPage() {
   const [waypointInput, setWaypointInput] = useState(SAMPLE_ROUTE);
   const [timeOfDay, setTimeOfDay] = useState("08:30");
   const [dayOfWeek, setDayOfWeek] = useState(2);
