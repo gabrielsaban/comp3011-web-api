@@ -10,7 +10,7 @@ const NAV_ITEMS = [
   { href: "/developer", label: "Developer" },
 ];
 
-export function TopNav(): JSX.Element {
+export function TopNav() {
   const pathname = usePathname();
 
   return (

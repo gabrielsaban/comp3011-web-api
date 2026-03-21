@@ -9,7 +9,7 @@ type HealthState =
   | { status: "ok" }
   | { status: "error"; message: string };
 
-export function HealthPill(): JSX.Element {
+export function HealthPill() {
   const [state, setState] = useState<HealthState>({ status: "loading" });
 
   useEffect(() => {

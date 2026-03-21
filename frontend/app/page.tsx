@@ -21,7 +21,7 @@ const SERVICE_STEPS = [
   },
 ];
 
-export default function HomePage(): JSX.Element {
+export default function HomePage() {
   return (
     <section className="reveal" style={{ animationDelay: "0.08s" }}>
       <div className="surface" style={{ padding: "1.4rem" }}>
