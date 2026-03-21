@@ -1,13 +1,20 @@
 #!/usr/bin/env sh
 set -eu
 
+VENV_BIN="/app/.venv/bin"
+
+if [ ! -x "$VENV_BIN/uvicorn" ] || [ ! -x "$VENV_BIN/alembic" ]; then
+  echo "Missing expected virtualenv binaries under $VENV_BIN"
+  exit 1
+fi
+
 if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
   echo "Running Alembic migrations..."
-  uv run alembic upgrade head
+  "$VENV_BIN/alembic" upgrade head
 fi
 
 echo "Starting API..."
-exec uv run uvicorn app.main:app \
+exec "$VENV_BIN/uvicorn" app.main:app \
   --host 0.0.0.0 \
   --port "${PORT:-8000}" \
   --workers "${UVICORN_WORKERS:-1}" \
