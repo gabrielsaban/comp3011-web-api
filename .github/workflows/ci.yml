@@ -49,6 +49,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
+      - name: Dependency vulnerability scan
+        run: uvx --from pip-audit pip-audit
+
       - name: Run migrations
         run: uv run alembic upgrade head
 
