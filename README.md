@@ -139,6 +139,18 @@ Export the generated OpenAPI snapshot for submission artifacts:
 uv run python scripts/export_openapi.py --output docs/openapi.snapshot.json
 ```
 
+Generate a submission-ready PDF version of the human-readable API specification:
+
+```bash
+python3 scripts/export_api_spec_pdf.py \
+  --input docs/api-spec.md \
+  --html-output docs/api-documentation.html \
+  --pdf-output docs/api-documentation.pdf \
+  --openapi docs/openapi.snapshot.json
+```
+
+Submission API documentation PDF: [`docs/api-documentation.pdf`](docs/api-documentation.pdf)
+
 Reconciliation process and checklist are documented in
 [docs/openapi-process.md](docs/openapi-process.md).
 
