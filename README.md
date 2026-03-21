@@ -80,6 +80,21 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 uv run python scripts/smoke_deploy.py --base-url http://localhost:8000
 ```
 
+## Frontend (RouteWise UK)
+
+A production-style Next.js frontend is included in [`frontend/`](frontend/README.md).
+
+Quick start:
+
+```bash
+cd frontend
+cp .env.local.example .env.local
+npm install
+npm run dev
+```
+
+Set `NEXT_PUBLIC_API_BASE_URL` to your backend URL (Railway in cloud, `http://localhost:8000` locally).
+
 ## Running Tests
 
 The test suite requires the test database container:
