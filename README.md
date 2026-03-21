@@ -67,6 +67,19 @@ OpenAPI docs available at [http://localhost:8000/docs](http://localhost:8000/doc
 Startup caches for route-risk factors are preloaded by default
 (`CACHE_PRELOAD_ON_STARTUP=true` in `.env.example`).
 
+## Deployment (Docker)
+
+Production-like container deployment is documented in
+[docs/deployment.md](docs/deployment.md).
+
+Quick start:
+
+```bash
+cp .env.prod.example .env.prod
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+uv run python scripts/smoke_deploy.py --base-url http://localhost:8000
+```
+
 ## Running Tests
 
 The test suite requires the test database container:
